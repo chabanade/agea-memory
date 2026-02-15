@@ -86,6 +86,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-gemini}
       LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      TELEGRAM_MODE: ${TELEGRAM_MODE:-polling}
+      BOT_DOMAIN: ${BOT_DOMAIN:-}
       NEO4J_URI: ${NEO4J_URI}
       NEO4J_AUTH: ${NEO4J_AUTH}
     ports:

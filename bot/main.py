@@ -6,9 +6,11 @@ Recoit les messages Telegram, interroge Zep/Graphiti, repond.
 """
 
 import os
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -19,6 +21,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_ALLOWED_USERS = os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
 ZEP_API_URL = os.getenv("ZEP_API_URL", "http://localhost:8080")
 ZEP_SECRET_KEY = os.getenv("ZEP_SECRET_KEY", "")
+TELEGRAM_MODE = os.getenv("TELEGRAM_MODE", "polling")  # "polling" ou "webhook"
 
 # --- Logging ---
 logging.basicConfig(
@@ -34,12 +37,31 @@ llm = LLMProvider()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Demarrage et arret de l'application."""
-    logger.info("AGEA demarre - LLM: %s", llm.current_provider)
+    logger.info("AGEA demarre - LLM: %s, Mode: %s", llm.current_provider, TELEGRAM_MODE)
     logger.info("Zep API: %s", ZEP_API_URL)
-    # TODO: Configurer le webhook Telegram au demarrage
-    # url = f"https://{os.getenv('BOT_DOMAIN')}/webhook/telegram"
-    # await setup_telegram_webhook(url)
+
+    polling_task = None
+    if TELEGRAM_MODE == "polling":
+        # Supprimer tout webhook existant avant de passer en polling
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook"
+            )
+        polling_task = asyncio.create_task(telegram_polling_loop())
+        logger.info("Telegram polling demarre")
+    else:
+        webhook_url = f"https://{os.getenv('BOT_DOMAIN', '')}/webhook/telegram"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
+                json={"url": webhook_url},
+            )
+            logger.info("Webhook configure: %s -> %s", webhook_url, resp.json())
+
     yield
+
+    if polling_task:
+        polling_task.cancel()
     logger.info("AGEA arrete")
 
 
@@ -74,6 +96,51 @@ async def status():
     }
 
 
+# --- Telegram Polling ---
+
+async def telegram_polling_loop():
+    """Boucle de polling pour recevoir les messages Telegram sans webhook."""
+    offset = 0
+    async with httpx.AsyncClient(timeout=35.0) as client:
+        while True:
+            try:
+                resp = await client.get(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates",
+                    params={"offset": offset, "timeout": 30},
+                )
+                data = resp.json()
+                for update in data.get("result", []):
+                    offset = update["update_id"] + 1
+                    await process_telegram_update(update)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Erreur polling: %s", e)
+                await asyncio.sleep(5)
+
+
+async def process_telegram_update(update: dict):
+    """Traite un update Telegram (depuis polling ou webhook)."""
+    message = update.get("message", {})
+    chat_id = str(message.get("chat", {}).get("id", ""))
+    text = message.get("text", "")
+    user_id = str(message.get("from", {}).get("id", ""))
+
+    if TELEGRAM_ALLOWED_USERS and user_id not in TELEGRAM_ALLOWED_USERS:
+        logger.warning("Utilisateur non autorise: %s", user_id)
+        return
+
+    if not text:
+        return
+
+    logger.info("Message de %s: %s", user_id, text[:100])
+
+    if text.startswith("/"):
+        await handle_command(chat_id, text)
+    else:
+        await handle_message(chat_id, text)
+
+
 # --- Webhook Telegram ---
 @app.post("/webhook/telegram")
 async def telegram_webhook(request: Request):
@@ -86,27 +153,7 @@ async def telegram_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="JSON invalide")
 
-    message = data.get("message", {})
-    chat_id = str(message.get("chat", {}).get("id", ""))
-    text = message.get("text", "")
-    user_id = str(message.get("from", {}).get("id", ""))
-
-    # Securite : verifier que l'utilisateur est autorise
-    if TELEGRAM_ALLOWED_USERS and user_id not in TELEGRAM_ALLOWED_USERS:
-        logger.warning("Utilisateur non autorise: %s", user_id)
-        return JSONResponse({"ok": True})
-
-    if not text:
-        return JSONResponse({"ok": True})
-
-    logger.info("Message de %s: %s", user_id, text[:100])
-
-    # Router les commandes
-    if text.startswith("/"):
-        await handle_command(chat_id, text)
-    else:
-        await handle_message(chat_id, text)
-
+    await process_telegram_update(data)
     return JSONResponse({"ok": True})
 
 
@@ -212,8 +259,6 @@ async def cmd_projet(chat_id: str, args: str):
 
 async def send_telegram(chat_id: str, text: str):
     """Envoie un message Telegram."""
-    import httpx
-
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     async with httpx.AsyncClient() as client:
         await client.post(url, json={
