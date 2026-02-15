@@ -190,9 +190,9 @@ async def cmd_start(chat_id: str, args: str):
         chat_id,
         "AGEA - Memoire Inter-IA\n\n"
         "Commandes disponibles:\n"
-        "/ask <question> - Interroger la memoire\n"
-        "/memo <texte> - Enregistrer une information\n"
-        "/projet <nom> - Contexte d'un projet\n"
+        "/ask &lt;question&gt; - Interroger la memoire\n"
+        "/memo &lt;texte&gt; - Enregistrer une information\n"
+        "/projet &lt;nom&gt; - Contexte d'un projet\n"
         "/status - Etat du systeme",
     )
 
