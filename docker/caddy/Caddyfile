@@ -1,0 +1,16 @@
+# ===========================================
+# Caddy - Reverse Proxy HTTPS automatique
+# ===========================================
+# Remplacer les domaines par les vrais avant deploiement
+
+{$BOT_DOMAIN:agea.hexagon-enr.fr} {
+	reverse_proxy bot:8000
+}
+
+{$DOMAIN:memory.hexagon-enr.fr} {
+	reverse_proxy zep:8080
+
+	# Restreindre l'acces a l'API Zep (optionnel)
+	# @blocked not remote_ip {$VPS_IP} 127.0.0.1
+	# respond @blocked 403
+}

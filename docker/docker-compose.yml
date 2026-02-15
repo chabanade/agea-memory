@@ -1,0 +1,128 @@
+# ===========================================
+# AGEA Memory System - Docker Compose
+# ===========================================
+# Deploiement : scp vers VPS puis docker compose up -d
+# ===========================================
+
+services:
+  # --- PostgreSQL (metadata Zep + Graphiti) ---
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agea
+
+  # --- Neo4j (Knowledge Graph - Graphiti) ---
+  neo4j:
+    image: neo4j:5.22.0
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - agea
+
+  # --- Zep (Memory Engine) ---
+  zep:
+    image: ghcr.io/getzep/zep:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      ZEP_STORE_TYPE: postgres
+      ZEP_STORE_POSTGRES_DSN: ${POSTGRES_DSN}
+      ZEP_SECRET_KEY: ${ZEP_SECRET_KEY}
+      ZEP_OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ZEP_NEO4J_URI: ${NEO4J_URI}
+      ZEP_NEO4J_USER: neo4j
+      ZEP_NEO4J_PASSWORD: ${NEO4J_AUTH#*/}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agea
+
+  # --- Bot AGEA (FastAPI + Telegram) ---
+  bot:
+    build:
+      context: ../bot
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      zep:
+        condition: service_healthy
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
+      ZEP_API_URL: http://zep:8080
+      ZEP_SECRET_KEY: ${ZEP_SECRET_KEY}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      NEO4J_URI: ${NEO4J_URI}
+      NEO4J_AUTH: ${NEO4J_AUTH}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agea
+
+  # --- Caddy (Reverse Proxy + HTTPS auto) ---
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - bot
+      - zep
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - agea
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  neo4j_logs:
+  caddy_data:
+  caddy_config:
+
+networks:
+  agea:
+    driver: bridge

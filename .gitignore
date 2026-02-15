@@ -1,0 +1,32 @@
+# Environnement
+.env
+.env.local
+.env.production
+venv/
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# Systeme
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Docker volumes (ne pas committer les donnees)
+docker/data/
+docker/volumes/
+
+# Node (si utilise plus tard)
+node_modules/
+
+# Secrets
+*.pem
+*.key
+secrets/
