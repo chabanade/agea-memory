@@ -107,6 +107,8 @@ services:
     depends_on:
       - bot
       - zep
+    environment:
+      BOT_DOMAIN: ${BOT_DOMAIN:-srv987452.hstgr.cloud}
     ports:
       - "80:80"
       - "443:443"

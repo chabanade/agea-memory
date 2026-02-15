@@ -1,16 +1,37 @@
 # ===========================================
 # Caddy - Reverse Proxy HTTPS automatique
 # ===========================================
-# Remplacer les domaines par les vrais avant deploiement
+# Domaine actuel : srv987452.hstgr.cloud
+# Migration future : agea.hexagon-enr.fr (changer la ligne ci-dessous)
+# ===========================================
 
-{$BOT_DOMAIN:agea.hexagon-enr.fr} {
-	reverse_proxy bot:8000
-}
+{$BOT_DOMAIN:srv987452.hstgr.cloud} {
+	# Webhook Telegram -> Bot FastAPI
+	handle /webhook/* {
+		reverse_proxy bot:8000
+	}
 
-{$DOMAIN:memory.hexagon-enr.fr} {
-	reverse_proxy zep:8080
+	# API bot (health, status)
+	handle /health {
+		reverse_proxy bot:8000
+	}
 
-	# Restreindre l'acces a l'API Zep (optionnel)
-	# @blocked not remote_ip {$VPS_IP} 127.0.0.1
-	# respond @blocked 403
+	handle /status {
+		reverse_proxy bot:8000
+	}
+
+	# API Zep (memoire)
+	handle /api/* {
+		reverse_proxy zep:8080
+	}
+
+	# Zep healthcheck
+	handle /healthz {
+		reverse_proxy zep:8080
+	}
+
+	# Par defaut -> bot
+	handle {
+		reverse_proxy bot:8000
+	}
 }
