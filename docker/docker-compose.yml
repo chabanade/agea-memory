@@ -56,7 +56,9 @@ services:
       ZEP_STORE_TYPE: postgres
       ZEP_STORE_POSTGRES_DSN: ${POSTGRES_DSN}
       ZEP_SECRET_KEY: ${ZEP_SECRET_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      # Zep exige ZEP_OPENAI_API_KEY - on redirige vers Google Gemini (gratuit)
+      ZEP_OPENAI_API_KEY: ${GOOGLE_API_KEY}
+      ZEP_OPENAI_ENDPOINT: https://generativelanguage.googleapis.com/v1beta/openai
       ZEP_NEO4J_URI: ${NEO4J_URI}
       ZEP_NEO4J_USER: neo4j
       ZEP_NEO4J_PASSWORD: ${NEO4J_PASSWORD}
