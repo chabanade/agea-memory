@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 from llm_provider import LLMProvider
+from zep_client import ZepClient
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -30,8 +31,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agea")
 
-# --- LLM Provider ---
+# --- LLM Provider + Zep ---
 llm = LLMProvider()
+zep = ZepClient()
 
 
 @asynccontextmanager
@@ -211,36 +213,64 @@ async def cmd_status(chat_id: str, args: str):
 async def cmd_ask(chat_id: str, args: str):
     """Commande /ask - Interroger la memoire via Zep + LLM."""
     if not args:
-        await send_telegram(chat_id, "Usage: /ask <ta question>")
+        await send_telegram(chat_id, "Usage: /ask &lt;ta question&gt;")
         return
 
-    # TODO: Chercher dans Zep/Graphiti d'abord
-    # context = await search_zep(args)
-
-    # Pour l'instant, reponse directe via LLM
     try:
+        # 1. Chercher dans la memoire Zep
+        zep_results = await zep.search(args, limit=5)
+        context_parts = []
+        for r in zep_results:
+            if r["content"] and r["score"] > 0.5:
+                context_parts.append(r["content"])
+
+        # 2. Construire le prompt avec contexte memoire
+        system_prompt = "Tu es AGEA, l'assistant memoire d'HEXAGON ENR. Reponds en francais."
+        if context_parts:
+            memory_context = "\n---\n".join(context_parts)
+            system_prompt += (
+                f"\n\nVoici le contexte pertinent de ta memoire:\n"
+                f"---\n{memory_context}\n---\n"
+                f"Utilise ce contexte pour repondre si pertinent."
+            )
+
+        # 3. Appeler le LLM
         response = await llm.chat(
             messages=[
-                {"role": "system", "content": "Tu es AGEA, l'assistant memoire d'HEXAGON ENR. Reponds en francais."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": args},
             ]
         )
+
+        # 4. Sauvegarder l'echange dans Zep
+        await zep.add_memory(args, role="user")
+        await zep.add_memory(response, role="assistant")
+
+        # 5. Ajouter indicateur memoire si contexte utilise
+        if context_parts:
+            response = f"[Memoire: {len(context_parts)} ref.]\n\n{response}"
+
         await send_telegram(chat_id, response)
     except Exception as e:
-        logger.error("Erreur LLM: %s", e)
+        logger.error("Erreur /ask: %s", e)
         await send_telegram(chat_id, f"Erreur: {e}")
 
 
 async def cmd_memo(chat_id: str, args: str):
     """Commande /memo - Enregistrer une information dans Zep."""
     if not args:
-        await send_telegram(chat_id, "Usage: /memo <information a retenir>")
+        await send_telegram(chat_id, "Usage: /memo &lt;information a retenir&gt;")
         return
 
-    # TODO: Sauvegarder dans Zep/Graphiti
-    # await save_to_zep(args)
-
-    await send_telegram(chat_id, f"Memo enregistre (TODO: integration Zep)")
+    try:
+        ok = await zep.add_memory(args, role="user")
+        if ok:
+            await send_telegram(chat_id, f"Memo enregistre dans la memoire.")
+        else:
+            await send_telegram(chat_id, "Erreur lors de l'enregistrement.")
+    except Exception as e:
+        logger.error("Erreur /memo: %s", e)
+        await send_telegram(chat_id, f"Erreur: {e}")
 
 
 async def cmd_projet(chat_id: str, args: str):
