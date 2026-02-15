@@ -39,7 +39,7 @@ extractors:
 store:
   type: "postgres"
   postgres:
-    dsn: "postgresql://agea:password@postgres:5432/agea_memory"
+    dsn: "postgresql://agea:password@postgres:5432/agea_memory?sslmode=disable"
 
 server:
   host: 0.0.0.0
