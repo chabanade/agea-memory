@@ -1,7 +1,8 @@
 # ===========================================
 # AGEA Memory System - Docker Compose
 # ===========================================
-# Deploiement : scp vers VPS puis docker compose up -d
+# Deploiement : docker compose --env-file ../.env up -d
+# Le .env est a la racine du projet (un niveau au-dessus)
 # ===========================================
 
 services:
@@ -58,7 +59,7 @@ services:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       ZEP_NEO4J_URI: ${NEO4J_URI}
       ZEP_NEO4J_USER: neo4j
-      ZEP_NEO4J_PASSWORD: ${NEO4J_AUTH#*/}
+      ZEP_NEO4J_PASSWORD: ${NEO4J_PASSWORD}
     ports:
       - "8080:8080"
     healthcheck:

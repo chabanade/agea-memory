@@ -25,12 +25,12 @@ ssh "${VPS_USER}@${VPS_IP}" "test -f ${REMOTE_DIR}/.env || echo 'ATTENTION: .env
 
 # 3. Build et redemarrage
 echo "[3/4] Build et redemarrage Docker..."
-ssh "${VPS_USER}@${VPS_IP}" "cd ${REMOTE_DIR} && docker compose build --no-cache bot && docker compose up -d"
+ssh "${VPS_USER}@${VPS_IP}" "cd ${REMOTE_DIR}/docker && docker compose --env-file ../.env build --no-cache bot && docker compose --env-file ../.env up -d"
 
 # 4. Verification
 echo "[4/4] Verification sante..."
 sleep 5
-ssh "${VPS_USER}@${VPS_IP}" "docker compose -f ${REMOTE_DIR}/docker-compose.yml ps"
+ssh "${VPS_USER}@${VPS_IP}" "cd ${REMOTE_DIR}/docker && docker compose --env-file ../.env ps"
 
 echo "=== Deploiement termine ==="
 echo "Bot: https://${BOT_DOMAIN:-agea.hexagon-enr.fr}/status"
