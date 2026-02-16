@@ -221,7 +221,8 @@ async def cmd_ask(chat_id: str, args: str):
         zep_results = await zep.search(args, limit=5)
         context_parts = []
         for r in zep_results:
-            if r["content"] and r["score"] > 0.5:
+            # Filtrer: score > 0.5, contenu non vide, exclure echo de la question
+            if r["content"] and r["score"] > 0.5 and r["content"] != args:
                 context_parts.append(r["content"])
 
         # 2. Construire le prompt avec contexte memoire

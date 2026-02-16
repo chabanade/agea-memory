@@ -120,7 +120,7 @@ class ZepClient:
                 results.append({
                     "content": msg.get("content", ""),
                     "role": msg.get("role", ""),
-                    "score": item.get("score", 0),
+                    "score": item.get("dist", 0),
                     "created_at": msg.get("created_at", ""),
                 })
 
