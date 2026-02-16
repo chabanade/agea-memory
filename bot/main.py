@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -69,9 +70,29 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AGEA - Memoire Inter-IA",
-    version="0.1.0",
+    title="AGEA - Memoire Inter-IA HEXAGON ENR",
+    description=(
+        "API de memoire partagee pour HEXAGON ENR / Tesla Electric. "
+        "Permet a toute IA (ChatGPT, Gemini, Claude, etc.) de lire et ecrire "
+        "dans la memoire persistante Zep via recherche semantique. "
+        "Authentification par Bearer token obligatoire."
+    ),
+    version="1.0.0",
     lifespan=lifespan,
+    servers=[{"url": "https://srv987452.hstgr.cloud", "description": "Production VPS"}],
+)
+
+# --- CORS (Phase 3 - Custom GPT / Gemini Gem) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://chatgpt.com",
+        "https://chat.openai.com",
+        "https://aistudio.google.com",
+        "https://gemini.google.com",
+    ],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -113,47 +134,58 @@ async def verify_bearer(authorization: str = Header(default="")) -> None:
 
 
 class MemoRequest(BaseModel):
-    """Corps de requete pour POST /api/memo."""
+    """Corps de requete pour sauvegarder une information dans la memoire."""
     content: str
     role: str = "user"
     session_id: str = "mehdi-agea"
 
+    model_config = {"json_schema_extra": {
+        "examples": [{"content": "Le projet X a ete valide par le client", "role": "user"}]
+    }}
 
-@app.get("/api/context", tags=["bridge"])
+
+@app.get("/api/context", tags=["bridge"], operation_id="searchMemory",
+         summary="Recherche semantique dans la memoire")
 async def api_get_context(
     q: str,
     limit: int = 5,
     session_id: str = "mehdi-agea",
     authorization: str = Header(default=""),
 ):
-    """Recherche semantique dans la memoire AGEA.
-    Utilise par toute IA pour recuperer du contexte pertinent."""
+    """Cherche dans la memoire AGEA par recherche semantique.
+    Appeler cette route AVANT de repondre a l'utilisateur pour recuperer
+    du contexte pertinent (projets, decisions, clients, certifications).
+    Retourne les resultats tries par score de pertinence."""
     await verify_bearer(authorization)
     results = await zep.search(q, limit=limit, session_id=session_id)
     filtered = [r for r in results if r["score"] > 0.3]
     return {"query": q, "results": filtered, "count": len(filtered)}
 
 
-@app.post("/api/memo", tags=["bridge"])
+@app.post("/api/memo", tags=["bridge"], operation_id="saveMemo",
+          summary="Sauvegarder une information dans la memoire")
 async def api_post_memo(
     req: MemoRequest,
     authorization: str = Header(default=""),
 ):
     """Sauvegarde une information dans la memoire AGEA.
-    Utilise par toute IA pour persister des decisions ou connaissances."""
+    Appeler cette route APRES chaque echange important pour persister
+    les decisions, informations client, ou connaissances acquises."""
     await verify_bearer(authorization)
     ok = await zep.add_memory(req.content, role=req.role, session_id=req.session_id)
     return {"ok": ok, "content": req.content[:100]}
 
 
-@app.get("/api/session/{session_id}/history", tags=["bridge"])
+@app.get("/api/session/{session_id}/history", tags=["bridge"], operation_id="getHistory",
+         summary="Historique recent de la memoire")
 async def api_get_history(
     session_id: str,
     last_n: int = 10,
     authorization: str = Header(default=""),
 ):
-    """Recupere l'historique recent d'une session memoire.
-    Pour reconstruire le contexte complet d'une conversation."""
+    """Recupere les N derniers messages de la session memoire.
+    Utile pour reconstruire le contexte complet d'une conversation
+    ou voir les echanges recents avec d'autres IAs."""
     await verify_bearer(authorization)
     memory = await zep.get_memory(session_id=session_id, last_n=last_n)
     return memory or {"messages": []}
