@@ -22,7 +22,7 @@ extractors:
     embeddings:
       enabled: true
       chunk_size: 1000
-      dimensions: 768
+      dimensions: 384
       service: "local"
   messages:
     summarizer:
@@ -31,10 +31,10 @@ extractors:
       enabled: true
     embeddings:
       enabled: true
-      dimensions: 768
+      dimensions: 384
       service: "local"
     intent:
-      enabled: true
+      enabled: false
 
 store:
   type: "postgres"
