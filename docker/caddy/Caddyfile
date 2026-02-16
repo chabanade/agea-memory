@@ -20,7 +20,18 @@
 		reverse_proxy bot:8000
 	}
 
-	# API Zep (memoire)
+	# API Bridge Inter-IA -> Bot FastAPI (Phase 1)
+	handle /api/context {
+		reverse_proxy bot:8000
+	}
+	handle /api/memo {
+		reverse_proxy bot:8000
+	}
+	handle /api/session/* {
+		reverse_proxy bot:8000
+	}
+
+	# API Zep interne (memoire directe)
 	handle /api/* {
 		reverse_proxy zep:8080
 	}

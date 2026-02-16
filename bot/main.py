@@ -11,8 +11,9 @@ import logging
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from llm_provider import LLMProvider
 from zep_client import ZepClient
@@ -96,6 +97,66 @@ async def status():
         "zep_url": ZEP_API_URL,
         "telegram_configured": bool(TELEGRAM_BOT_TOKEN),
     }
+
+
+# --- API REST Bridge (Phase 1 - Bridge Universel Inter-IA) ---
+
+API_TOKEN = os.getenv("ZEP_SECRET_KEY", "")
+
+
+async def verify_bearer(authorization: str = Header(default="")) -> None:
+    """Verifie le Bearer token pour les endpoints API REST."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Bearer token requis")
+    if authorization[7:] != API_TOKEN:
+        raise HTTPException(status_code=403, detail="Token invalide")
+
+
+class MemoRequest(BaseModel):
+    """Corps de requete pour POST /api/memo."""
+    content: str
+    role: str = "user"
+    session_id: str = "mehdi-agea"
+
+
+@app.get("/api/context", tags=["bridge"])
+async def api_get_context(
+    q: str,
+    limit: int = 5,
+    session_id: str = "mehdi-agea",
+    authorization: str = Header(default=""),
+):
+    """Recherche semantique dans la memoire AGEA.
+    Utilise par toute IA pour recuperer du contexte pertinent."""
+    await verify_bearer(authorization)
+    results = await zep.search(q, limit=limit, session_id=session_id)
+    filtered = [r for r in results if r["score"] > 0.3]
+    return {"query": q, "results": filtered, "count": len(filtered)}
+
+
+@app.post("/api/memo", tags=["bridge"])
+async def api_post_memo(
+    req: MemoRequest,
+    authorization: str = Header(default=""),
+):
+    """Sauvegarde une information dans la memoire AGEA.
+    Utilise par toute IA pour persister des decisions ou connaissances."""
+    await verify_bearer(authorization)
+    ok = await zep.add_memory(req.content, role=req.role, session_id=req.session_id)
+    return {"ok": ok, "content": req.content[:100]}
+
+
+@app.get("/api/session/{session_id}/history", tags=["bridge"])
+async def api_get_history(
+    session_id: str,
+    last_n: int = 10,
+    authorization: str = Header(default=""),
+):
+    """Recupere l'historique recent d'une session memoire.
+    Pour reconstruire le contexte complet d'une conversation."""
+    await verify_bearer(authorization)
+    memory = await zep.get_memory(session_id=session_id, last_n=last_n)
+    return memory or {"messages": []}
 
 
 # --- Telegram Polling ---
