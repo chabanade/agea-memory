@@ -43,12 +43,29 @@ services:
     networks:
       - agea
 
+  # --- Zep NLP Server (Embeddings locaux) ---
+  zep-nlp:
+    image: ghcr.io/getzep/zep-nlp-server:latest
+    restart: unless-stopped
+    environment:
+      ENABLE_EMBEDDINGS: "true"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/5557"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - agea
+
   # --- Zep (Memory Engine) ---
   zep:
     image: ghcr.io/getzep/zep:latest
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      zep-nlp:
         condition: service_healthy
     environment:
       # Secrets via env vars (jamais dans config.yaml)

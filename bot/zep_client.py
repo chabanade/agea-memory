@@ -31,7 +31,7 @@ class ZepClient:
 
     async def ensure_session(self, session_id: str = DEFAULT_SESSION_ID) -> bool:
         """Cree la session si elle n'existe pas. Retourne True si OK."""
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             # Verifier si la session existe
             resp = await client.get(
                 f"{self.base_url}/sessions/{session_id}",
@@ -65,7 +65,7 @@ class ZepClient:
         """Ajoute un message a la memoire Zep. Retourne True si OK."""
         await self.ensure_session(session_id)
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 f"{self.base_url}/sessions/{session_id}/memory",
                 headers=self.headers,
@@ -98,7 +98,7 @@ class ZepClient:
         """
         await self.ensure_session(session_id)
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 f"{self.base_url}/sessions/{session_id}/search",
                 headers=self.headers,
@@ -133,7 +133,7 @@ class ZepClient:
         last_n: int = 10,
     ) -> Optional[dict]:
         """Recupere la memoire recente d'une session."""
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
                 f"{self.base_url}/sessions/{session_id}/memory",
                 headers=self.headers,
