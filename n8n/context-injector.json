@@ -1,0 +1,130 @@
+{
+  "name": "AGEA Context Injector",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "context-injector",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [220, 300],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+      "webhookId": "d5e6f7a8-b9c0-4d1e-2f3a-4b5c6d7e8f90"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://bot:8000/api/context",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "q", "value": "={{ $json.body.question }}"},
+            {"name": "limit", "value": "5"}
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ $env.AGEA_API_TOKEN }}"}
+          ]
+        },
+        "options": {}
+      },
+      "name": "Recherche Memoire",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "id": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e"
+    },
+    {
+      "parameters": {
+        "jsCode": "const question = $(\"Webhook\").first().json.body.question;\nconst searchResults = $input.first().json;\nlet contextBlock = \"\";\nif (searchResults.results && searchResults.results.length > 0) {\n  const lines = searchResults.results.map(r => \"[\" + r.role + \"] \" + r.content);\n  contextBlock = \"\\n\\nContexte memoire (\" + lines.length + \" resultats):\\n---\\n\" + lines.join(\"\\n\") + \"\\n---\";\n}\nreturn [{json:{question, systemPrompt:\"Tu es AGEA, assistant memoire HEXAGON ENR. Reponds en francais.\" + contextBlock, contextCount:searchResults.count||0}}];"
+      },
+      "name": "Construire Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "id": "c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ $env.DEEPSEEK_API_KEY }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\":\"deepseek-chat\",\"messages\":[{\"role\":\"system\",\"content\":{{ JSON.stringify($json.systemPrompt) }}},{\"role\":\"user\",\"content\":{{ JSON.stringify($json.question) }}}],\"max_tokens\":1024}",
+        "options": {}
+      },
+      "name": "Appel LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "id": "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f80"
+    },
+    {
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst answer = llm.choices?.[0]?.message?.content || \"Erreur LLM\";\nreturn [{json:{answer, question:$(\"Construire Prompt\").first().json.question, contextCount:$(\"Construire Prompt\").first().json.contextCount, model:llm.model||\"deepseek\"}}];"
+      },
+      "name": "Extraire Reponse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300],
+      "id": "e5f6a7b8-c9d0-4e1f-2a3b-4c5d6e7f8091"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://bot:8000/api/memo",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer {{ $env.AGEA_API_TOKEN }}"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"content\":{{ JSON.stringify($json.answer.substring(0,500)) }},\"role\":\"assistant\"}",
+        "options": {}
+      },
+      "name": "Sauvegarder Memo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 300],
+      "id": "f6a7b8c9-d0e1-4f2a-3b4c-5d6e7f809102"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"answer\":{{ JSON.stringify($(\"Extraire Reponse\").first().json.answer) }},\"model\":{{ JSON.stringify($(\"Extraire Reponse\").first().json.model) }},\"context_used\":{{ $(\"Extraire Reponse\").first().json.contextCount }},\"saved\":true}",
+        "options": {}
+      },
+      "name": "Repondre",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1540, 300],
+      "id": "a7b8c9d0-e1f2-4a3b-4c5d-6e7f80910213"
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Recherche Memoire", "type": "main", "index": 0}]]},
+    "Recherche Memoire": {"main": [[{"node": "Construire Prompt", "type": "main", "index": 0}]]},
+    "Construire Prompt": {"main": [[{"node": "Appel LLM", "type": "main", "index": 0}]]},
+    "Appel LLM": {"main": [[{"node": "Extraire Reponse", "type": "main", "index": 0}]]},
+    "Extraire Reponse": {"main": [[{"node": "Sauvegarder Memo", "type": "main", "index": 0}]]},
+    "Sauvegarder Memo": {"main": [[{"node": "Repondre", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}
