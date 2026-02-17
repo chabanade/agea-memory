@@ -23,7 +23,7 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "Bearer f81b062b602165db868680fac57262ed77eaed6b613e2851248360d680cc95b9"}
+            {"name": "Authorization", "value": "Bearer ${AGEA_API_TOKEN}"}
           ]
         },
         "options": {}
@@ -41,7 +41,7 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "Bearer sk-186b94332df24fdea43bb753c8062ab7"},
+            {"name": "Authorization", "value": "Bearer ${DEEPSEEK_API_KEY}"},
             {"name": "Content-Type", "value": "application/json"}
           ]
         },
@@ -63,7 +63,7 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {"name": "Authorization", "value": "Bearer f81b062b602165db868680fac57262ed77eaed6b613e2851248360d680cc95b9"},
+            {"name": "Authorization", "value": "Bearer ${AGEA_API_TOKEN}"},
             {"name": "Content-Type", "value": "application/json"}
           ]
         },
