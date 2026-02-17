@@ -6,6 +6,11 @@
 # ===========================================
 
 {$BOT_DOMAIN:srv987452.hstgr.cloud} {
+	# Webhook n8n -> n8n (Phase 4 - workflows IA)
+	handle /webhook/agea-bridge {
+		reverse_proxy n8n-n8n-1:5678
+	}
+
 	# Webhook Telegram -> Bot FastAPI
 	handle /webhook/* {
 		reverse_proxy bot:8000

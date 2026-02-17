@@ -1,0 +1,101 @@
+{
+  "name": "AGEA Bridge v3",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agea-bridge",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [220, 300],
+      "id": "wh-001",
+      "webhookId": "agea-bridge-v3-wh"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ \"http://bot:8000/api/context?q=\" + encodeURIComponent($json.body.question) + \"&limit=5\" }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer f81b062b602165db868680fac57262ed77eaed6b613e2851248360d680cc95b9"}
+          ]
+        },
+        "options": {}
+      },
+      "name": "1 Recherche Memoire",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "id": "hr-001"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer sk-186b94332df24fdea43bb753c8062ab7"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\"model\": \"deepseek-chat\", \"messages\": [{\"role\": \"system\", \"content\": \"Tu es AGEA, assistant memoire HEXAGON ENR. Contexte memoire: \" + JSON.stringify($json.results || [])}, {\"role\": \"user\", \"content\": $('Webhook').first().json.body.question}], \"max_tokens\": 1024}) }}",
+        "options": {}
+      },
+      "name": "2 Appel DeepSeek",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "id": "hr-002"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://bot:8000/api/memo",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "Authorization", "value": "Bearer f81b062b602165db868680fac57262ed77eaed6b613e2851248360d680cc95b9"},
+            {"name": "Content-Type", "value": "application/json"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\"content\": ($json.choices && $json.choices[0] && $json.choices[0].message) ? $json.choices[0].message.content.substring(0, 500) : \"no response\", \"role\": \"assistant\"}) }}",
+        "options": {}
+      },
+      "name": "3 Sauvegarder Memo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "id": "hr-003"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\"answer\": $('2 Appel DeepSeek').first().json.choices[0].message.content, \"model\": $('2 Appel DeepSeek').first().json.model || \"deepseek\", \"saved\": true}) }}",
+        "options": {}
+      },
+      "name": "4 Repondre",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1100, 300],
+      "id": "rw-001"
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "1 Recherche Memoire", "type": "main", "index": 0}]]},
+    "1 Recherche Memoire": {"main": [[{"node": "2 Appel DeepSeek", "type": "main", "index": 0}]]},
+    "2 Appel DeepSeek": {"main": [[{"node": "3 Sauvegarder Memo", "type": "main", "index": 0}]]},
+    "3 Sauvegarder Memo": {"main": [[{"node": "4 Repondre", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}
