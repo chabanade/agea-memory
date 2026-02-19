@@ -47,7 +47,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\"model\": \"deepseek-chat\", \"messages\": [{\"role\": \"system\", \"content\": \"Tu es AGEA, assistant memoire HEXAGON ENR. Contexte memoire: \" + JSON.stringify($json.results || [])}, {\"role\": \"user\", \"content\": $('Webhook').first().json.body.question}], \"max_tokens\": 1024}) }}",
+        "jsonBody": "={{ JSON.stringify({\"model\": \"deepseek-chat\", \"messages\": [{\"role\": \"system\", \"content\": \"Tu es AGEA, assistant memoire HEXAGONE ENERGIE (ne jamais dire HEXAGON ENR). Contexte memoire: \" + JSON.stringify($json.results || [])}, {\"role\": \"user\", \"content\": $('Webhook').first().json.body.question}], \"max_tokens\": 1024}) }}",
         "options": {}
       },
       "name": "2 Appel DeepSeek",

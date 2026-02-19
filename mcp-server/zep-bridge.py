@@ -19,7 +19,7 @@ AGEA_TOKEN = os.getenv("AGEA_API_TOKEN", "")
 
 mcp = FastMCP(
     "zep-memory",
-    instructions="Memoire persistante AGEA/HEXAGON ENR. "
+    instructions="Memoire persistante AGEA/HEXAGONE ENERGIE. "
     "Utilise search_memory pour chercher du contexte, "
     "save_memory pour sauvegarder des decisions/informations, "
     "get_history pour voir l'historique recent.",

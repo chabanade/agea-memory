@@ -43,7 +43,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const question = $(\"Webhook\").first().json.body.question;\nconst searchResults = $input.first().json;\nlet contextBlock = \"\";\nif (searchResults.results && searchResults.results.length > 0) {\n  const lines = searchResults.results.map(r => \"[\" + r.role + \"] \" + r.content);\n  contextBlock = \"\\n\\nContexte memoire (\" + lines.length + \" resultats):\\n---\\n\" + lines.join(\"\\n\") + \"\\n---\";\n}\nreturn [{json:{question, systemPrompt:\"Tu es AGEA, assistant memoire HEXAGON ENR. Reponds en francais.\" + contextBlock, contextCount:searchResults.count||0}}];"
+        "jsCode": "const question = $(\"Webhook\").first().json.body.question;\nconst searchResults = $input.first().json;\nlet contextBlock = \"\";\nif (searchResults.results && searchResults.results.length > 0) {\n  const lines = searchResults.results.map(r => \"[\" + r.role + \"] \" + r.content);\n  contextBlock = \"\\n\\nContexte memoire (\" + lines.length + \" resultats):\\n---\\n\" + lines.join(\"\\n\") + \"\\n---\";\n}\nreturn [{json:{question, systemPrompt:\"Tu es AGEA, assistant memoire HEXAGONE ENERGIE. Reponds en francais.\" + contextBlock, contextCount:searchResults.count||0}}];"
       },
       "name": "Construire Prompt",
       "type": "n8n-nodes-base.code",

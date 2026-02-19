@@ -70,9 +70,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AGEA - Memoire Inter-IA HEXAGON ENR",
+    title="AGEA - Memoire Inter-IA HEXAGONE ENERGIE",
     description=(
-        "API de memoire partagee pour HEXAGON ENR / Tesla Electric. "
+        "API de memoire partagee pour HEXAGONE ENERGIE / Tesla Electric. "
         "Permet a toute IA (ChatGPT, Gemini, Claude, etc.) de lire et ecrire "
         "dans la memoire persistante Zep via recherche semantique. "
         "Authentification par Bearer token obligatoire."
@@ -319,7 +319,13 @@ async def cmd_ask(chat_id: str, args: str):
                 context_parts.append(r["content"])
 
         # 2. Construire le prompt avec contexte memoire
-        system_prompt = "Tu es AGEA, l'assistant memoire d'HEXAGON ENR. Reponds en francais."
+        system_prompt = (
+            "Tu es AGEA, l'assistant memoire de HEXAGONE ENERGIE (anciennement HEXAGON ENR). "
+            "Reponds en francais.\n"
+            "REGLE ABSOLUE: Le nom officiel est 'HEXAGONE ENERGIE'. "
+            "Ne jamais utiliser 'HEXAGON ENR' dans tes reponses, "
+            "meme si le contexte memoire contient cette ancienne appellation."
+        )
         if context_parts:
             memory_context = "\n---\n".join(context_parts)
             system_prompt += (
@@ -336,11 +342,16 @@ async def cmd_ask(chat_id: str, args: str):
             ]
         )
 
-        # 4. Sauvegarder l'echange dans Zep
+        # 4. Post-traitement: corriger noms obsoletes
+        response = response.replace("HEXAGON ENR", "HEXAGONE ENERGIE")
+        response = response.replace("Hexagon ENR", "Hexagone Energie")
+        response = response.replace("hexagon enr", "Hexagone Energie")
+
+        # 5. Sauvegarder l'echange dans Zep
         await zep.add_memory(args, role="user")
         await zep.add_memory(response, role="assistant")
 
-        # 5. Ajouter indicateur memoire si contexte utilise
+        # 6. Ajouter indicateur memoire si contexte utilise
         if context_parts:
             response = f"[Memoire: {len(context_parts)} ref.]\n\n{response}"
 
