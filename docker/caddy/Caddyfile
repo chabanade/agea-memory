@@ -36,6 +36,23 @@
 		reverse_proxy bot:8000
 	}
 
+	# API Graphiti -> Bot FastAPI (Phase 5)
+	handle /api/facts {
+		reverse_proxy bot:8000
+	}
+	handle /api/correct {
+		reverse_proxy bot:8000
+	}
+	handle /api/entity/* {
+		reverse_proxy bot:8000
+	}
+	handle /api/graphiti/* {
+		reverse_proxy bot:8000
+	}
+	handle /api/admin/* {
+		reverse_proxy bot:8000
+	}
+
 	# API Zep interne (memoire directe)
 	handle /api/* {
 		reverse_proxy zep:8080

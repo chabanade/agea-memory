@@ -18,6 +18,8 @@ from pydantic import BaseModel
 
 from llm_provider import LLMProvider
 from zep_client import ZepClient
+from graphiti_client import GraphitiClient
+from graphiti_worker import GraphitiWorker, enqueue_graphiti_task
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -33,16 +35,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agea")
 
-# --- LLM Provider + Zep ---
+# --- LLM Provider + Zep + Graphiti ---
 llm = LLMProvider()
 zep = ZepClient()
+graphiti = GraphitiClient()
+graphiti_worker = None  # Initialise dans le lifespan
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Demarrage et arret de l'application."""
+    global graphiti_worker
     logger.info("AGEA demarre - LLM: %s, Mode: %s", llm.current_provider, TELEGRAM_MODE)
     logger.info("Zep API: %s", ZEP_API_URL)
+
+    # Initialiser Graphiti (non-bloquant si desactive ou echec)
+    graphiti_ok = await graphiti.initialize()
+    if graphiti_ok:
+        logger.info("Graphiti initialise avec succes")
+    else:
+        logger.info("Graphiti non disponible (desactive ou echec init)")
+
+    # Lancer le worker Graphiti en tache de fond
+    worker_task = None
+    if graphiti_ok:
+        graphiti_worker = GraphitiWorker(graphiti)
+        worker_task = asyncio.create_task(graphiti_worker.run())
+        logger.info("Worker Graphiti lance en arriere-plan")
 
     polling_task = None
     if TELEGRAM_MODE == "polling":
@@ -64,8 +83,14 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Arret propre
+    if graphiti_worker:
+        await graphiti_worker.stop()
+    if worker_task:
+        worker_task.cancel()
     if polling_task:
         polling_task.cancel()
+    await graphiti.close()
     logger.info("AGEA arrete")
 
 
@@ -104,6 +129,8 @@ async def health():
         "status": "ok",
         "service": "agea",
         "llm_provider": llm.current_provider,
+        "graphiti_available": graphiti.available,
+        "graphiti_read_enabled": graphiti.read_enabled,
     }
 
 
@@ -113,10 +140,12 @@ async def status():
     """Statut detaille du systeme."""
     return {
         "service": "agea",
-        "version": "0.1.0",
+        "version": "2.0.0",
         "llm_provider": llm.current_provider,
         "zep_url": ZEP_API_URL,
         "telegram_configured": bool(TELEGRAM_BOT_TOKEN),
+        "graphiti_available": graphiti.available,
+        "graphiti_read_enabled": graphiti.read_enabled,
     }
 
 
@@ -173,7 +202,17 @@ async def api_post_memo(
     les decisions, informations client, ou connaissances acquises."""
     await verify_bearer(authorization)
     ok = await zep.add_memory(req.content, role=req.role, session_id=req.session_id)
-    return {"ok": ok, "content": req.content[:100]}
+
+    # Queue Graphiti async (si active)
+    queued = False
+    if graphiti.available:
+        queued = await enqueue_graphiti_task(
+            content=req.content,
+            task_type="add_episode",
+            source_description=f"api ({req.role})",
+        )
+
+    return {"ok": ok, "queued": queued, "content": req.content[:100]}
 
 
 @app.get("/api/session/{session_id}/history", tags=["bridge"], operation_id="getHistory",
@@ -189,6 +228,137 @@ async def api_get_history(
     await verify_bearer(authorization)
     memory = await zep.get_memory(session_id=session_id, last_n=last_n)
     return memory or {"messages": []}
+
+
+# --- API REST Graphiti (Phase 5) ---
+
+class CorrectRequest(BaseModel):
+    """Corps de requete pour corriger un fait."""
+    content: str
+    source: str = "api"
+
+
+@app.get("/api/facts", tags=["graphiti"], operation_id="searchFacts",
+         summary="Recherche dans le knowledge graph (fallback Zep)")
+async def api_get_facts(
+    q: str,
+    limit: int = 5,
+    authorization: str = Header(default=""),
+):
+    """Recherche hybride dans le knowledge graph Graphiti.
+    0 appels LLM (seulement 1 embedding) = sub-second.
+    Fallback automatique vers Zep si Graphiti non disponible."""
+    await verify_bearer(authorization)
+
+    source = "zep"
+    results = []
+
+    if graphiti.read_enabled:
+        facts = await graphiti.search(q, num_results=limit)
+        if facts:
+            source = "graphiti"
+            results = [{"fact": f["fact"], "name": f.get("name", "")} for f in facts]
+
+    if not results:
+        zep_results = await zep.search(q, limit=limit)
+        results = [
+            {"fact": r["content"], "name": "", "score": r["score"]}
+            for r in zep_results if r["score"] > 0.3
+        ]
+
+    return {"query": q, "source": source, "results": results, "count": len(results)}
+
+
+@app.post("/api/correct", tags=["graphiti"], operation_id="correctFact",
+          summary="Corriger un fait dans le knowledge graph")
+async def api_post_correct(
+    req: CorrectRequest,
+    authorization: str = Header(default=""),
+):
+    """Enqueue une correction bi-temporelle.
+    Le worker Graphiti traitera la correction en arriere-plan."""
+    await verify_bearer(authorization)
+
+    if not graphiti.available:
+        raise HTTPException(status_code=503, detail="Graphiti non disponible")
+
+    queued = await enqueue_graphiti_task(
+        content=req.content,
+        task_type="correct",
+        source_description=req.source,
+    )
+    return {"ok": queued, "content": req.content[:100]}
+
+
+@app.get("/api/entity/{name}", tags=["graphiti"], operation_id="getEntity",
+         summary="Recuperer les faits lies a une entite")
+async def api_get_entity(
+    name: str,
+    authorization: str = Header(default=""),
+):
+    """Recupere tous les faits lies a une entite dans le knowledge graph."""
+    await verify_bearer(authorization)
+
+    if not graphiti.read_enabled:
+        raise HTTPException(status_code=503, detail="Lecture Graphiti non activee")
+
+    entity = await graphiti.get_entity(name)
+    return entity or {"entity": name, "facts_count": 0, "facts": []}
+
+
+@app.get("/api/graphiti/health", tags=["graphiti"], operation_id="graphitiHealth",
+         summary="Sante du knowledge graph Graphiti/Neo4j")
+async def api_graphiti_health(
+    authorization: str = Header(default=""),
+):
+    """Verifie la sante de Graphiti et tente reconnexion si necessaire."""
+    await verify_bearer(authorization)
+    return await graphiti.health_check()
+
+
+@app.get("/api/graphiti/queue", tags=["graphiti"], operation_id="graphitiQueue",
+         summary="Statistiques de la queue Graphiti")
+async def api_graphiti_queue(
+    authorization: str = Header(default=""),
+):
+    """Retourne les statistiques de la queue de traitement."""
+    await verify_bearer(authorization)
+
+    if not graphiti_worker:
+        return {"error": "Worker non actif", "pending": 0, "done": 0, "failed": 0, "total": 0}
+
+    return await graphiti_worker.get_queue_stats()
+
+
+@app.post("/api/admin/reindex", tags=["admin"], operation_id="adminReindex",
+          summary="Re-enqueue les messages Zep dans Graphiti")
+async def api_admin_reindex(
+    last_n: int = 50,
+    authorization: str = Header(default=""),
+):
+    """Relit les N derniers messages Zep et les enqueue pour Graphiti.
+    Idempotent grace a message_uuid UNIQUE + ON CONFLICT DO NOTHING."""
+    await verify_bearer(authorization)
+
+    if not graphiti.available:
+        raise HTTPException(status_code=503, detail="Graphiti non disponible")
+
+    memory = await zep.get_memory(session_id="mehdi-agea", last_n=last_n)
+    messages = memory.get("messages", []) if memory else []
+
+    enqueued = 0
+    for msg in messages:
+        content = msg.get("content", "")
+        if content and len(content) > 10:
+            ok = await enqueue_graphiti_task(
+                content=content,
+                task_type="add_episode",
+                source_description="reindex zep",
+            )
+            if ok:
+                enqueued += 1
+
+    return {"ok": True, "messages_found": len(messages), "enqueued": enqueued}
 
 
 # --- Telegram Polling ---
@@ -263,6 +433,10 @@ async def handle_command(chat_id: str, text: str):
         "/ask": cmd_ask,
         "/memo": cmd_memo,
         "/projet": cmd_projet,
+        "/correct": cmd_correct,
+        "/forget": cmd_forget,
+        "/entity": cmd_entity,
+        "/queue": cmd_queue,
     }
 
     handler = handlers.get(command)
@@ -288,37 +462,57 @@ async def cmd_start(chat_id: str, args: str):
         "/ask &lt;question&gt; - Interroger la memoire\n"
         "/memo &lt;texte&gt; - Enregistrer une information\n"
         "/projet &lt;nom&gt; - Contexte d'un projet\n"
+        "/correct &lt;fait&gt; - Corriger un fait\n"
+        "/forget &lt;fait&gt; - Oublier un fait\n"
+        "/entity &lt;nom&gt; - Infos sur une entite\n"
+        "/queue - Statut de la queue\n"
         "/status - Etat du systeme",
     )
 
 
 async def cmd_status(chat_id: str, args: str):
     """Commande /status - Etat du systeme."""
+    graphiti_status = "ON" if graphiti.available else "OFF"
+    graphiti_read = "ON" if graphiti.read_enabled else "OFF"
     await send_telegram(
         chat_id,
-        f"AGEA v0.1.0\n"
+        f"AGEA v2.0.0\n"
         f"LLM: {llm.current_provider}\n"
         f"Zep: {ZEP_API_URL}\n"
+        f"Graphiti: {graphiti_status} (lecture: {graphiti_read})\n"
         f"Status: Operationnel",
     )
 
 
 async def cmd_ask(chat_id: str, args: str):
-    """Commande /ask - Interroger la memoire via Zep + LLM."""
+    """Commande /ask - Interroger la memoire via Graphiti/Zep + LLM."""
     if not args:
         await send_telegram(chat_id, "Usage: /ask &lt;ta question&gt;")
         return
 
     try:
-        # 1. Chercher dans la memoire Zep
-        zep_results = await zep.search(args, limit=5)
         context_parts = []
-        for r in zep_results:
-            # Filtrer: score > 0.5, contenu non vide, exclure echo de la question
-            if r["content"] and r["score"] > 0.5 and r["content"] != args:
-                context_parts.append(r["content"])
+        source_tag = "Zep"
 
-        # 2. Construire le prompt avec contexte memoire
+        # 1. Recherche Graphiti prioritaire (0 appels LLM, sub-second)
+        if graphiti.read_enabled:
+            graphiti_facts = await graphiti.search(args, num_results=5)
+            for f in graphiti_facts:
+                fact_text = f.get("fact", "")
+                if fact_text:
+                    context_parts.append(fact_text)
+            if context_parts:
+                source_tag = "Graphiti"
+
+        # 2. Fallback Zep si pas de resultats Graphiti
+        if not context_parts:
+            zep_results = await zep.search(args, limit=5)
+            for r in zep_results:
+                if r["content"] and r["score"] > 0.5 and r["content"] != args:
+                    context_parts.append(r["content"])
+            source_tag = "Zep"
+
+        # 3. Construire le prompt avec contexte memoire
         system_prompt = (
             "Tu es AGEA, l'assistant memoire de HEXAGONE ENERGIE (anciennement HEXAGON ENR). "
             "Reponds en francais.\n"
@@ -334,7 +528,7 @@ async def cmd_ask(chat_id: str, args: str):
                 f"Utilise ce contexte pour repondre si pertinent."
             )
 
-        # 3. Appeler le LLM
+        # 4. Appeler le LLM
         response = await llm.chat(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -342,18 +536,18 @@ async def cmd_ask(chat_id: str, args: str):
             ]
         )
 
-        # 4. Post-traitement: corriger noms obsoletes
+        # 5. Post-traitement: corriger noms obsoletes
         response = response.replace("HEXAGON ENR", "HEXAGONE ENERGIE")
         response = response.replace("Hexagon ENR", "Hexagone Energie")
         response = response.replace("hexagon enr", "Hexagone Energie")
 
-        # 5. Sauvegarder l'echange dans Zep
+        # 6. Sauvegarder l'echange dans Zep
         await zep.add_memory(args, role="user")
         await zep.add_memory(response, role="assistant")
 
-        # 6. Ajouter indicateur memoire si contexte utilise
+        # 7. Ajouter indicateur source memoire
         if context_parts:
-            response = f"[Memoire: {len(context_parts)} ref.]\n\n{response}"
+            response = f"[{source_tag}: {len(context_parts)} ref.]\n\n{response}"
 
         await send_telegram(chat_id, response)
     except Exception as e:
@@ -362,15 +556,29 @@ async def cmd_ask(chat_id: str, args: str):
 
 
 async def cmd_memo(chat_id: str, args: str):
-    """Commande /memo - Enregistrer une information dans Zep."""
+    """Commande /memo - Enregistrer dans Zep (sync) + queue Graphiti (async)."""
     if not args:
         await send_telegram(chat_id, "Usage: /memo &lt;information a retenir&gt;")
         return
 
     try:
+        # 1. Zep sync (reponse immediate)
         ok = await zep.add_memory(args, role="user")
+
+        # 2. Queue Graphiti async (si active)
+        queued = False
+        if graphiti.available:
+            queued = await enqueue_graphiti_task(
+                content=args,
+                task_type="add_episode",
+                source_description="telegram /memo",
+            )
+
         if ok:
-            await send_telegram(chat_id, f"Memo enregistre dans la memoire.")
+            msg = "Memo enregistre."
+            if queued:
+                msg += " Structuration KG en cours..."
+            await send_telegram(chat_id, msg)
         else:
             await send_telegram(chat_id, "Erreur lors de l'enregistrement.")
     except Exception as e:
@@ -379,15 +587,126 @@ async def cmd_memo(chat_id: str, args: str):
 
 
 async def cmd_projet(chat_id: str, args: str):
-    """Commande /projet - Contexte d'un projet specifique."""
+    """Commande /projet - Contexte d'un projet via Graphiti."""
     if not args:
-        await send_telegram(chat_id, "Usage: /projet <nom du projet>")
+        await send_telegram(chat_id, "Usage: /projet &lt;nom du projet&gt;")
         return
 
-    # TODO: Chercher le projet dans le graphe Graphiti
-    # project_context = await search_project(args)
+    if graphiti.read_enabled:
+        entity = await graphiti.get_entity(args)
+        if entity and entity.get("facts"):
+            facts_text = "\n".join(
+                f"- {f['fact']}" for f in entity["facts"][:10]
+            )
+            await send_telegram(
+                chat_id,
+                f"Projet '{args}' ({entity['facts_count']} faits):\n\n{facts_text}",
+            )
+            return
 
-    await send_telegram(chat_id, f"Projet '{args}' (TODO: integration Graphiti)")
+    await send_telegram(chat_id, f"Aucune info trouvee pour '{args}'.")
+
+
+async def cmd_correct(chat_id: str, args: str):
+    """Commande /correct - Corriger un fait dans le knowledge graph."""
+    if not args:
+        await send_telegram(chat_id, "Usage: /correct &lt;fait corrige&gt;")
+        return
+
+    if not graphiti.available:
+        await send_telegram(chat_id, "Graphiti non disponible.")
+        return
+
+    try:
+        queued = await enqueue_graphiti_task(
+            content=args,
+            task_type="correct",
+            source_description="telegram /correct",
+        )
+        if queued:
+            await send_telegram(chat_id, "Correction enregistree. Traitement en cours...")
+        else:
+            await send_telegram(chat_id, "Erreur lors de l'enregistrement de la correction.")
+    except Exception as e:
+        logger.error("Erreur /correct: %s", e)
+        await send_telegram(chat_id, f"Erreur: {e}")
+
+
+async def cmd_forget(chat_id: str, args: str):
+    """Commande /forget - Invalider un fait dans le knowledge graph."""
+    if not args:
+        await send_telegram(chat_id, "Usage: /forget &lt;fait a oublier&gt;")
+        return
+
+    if not graphiti.available:
+        await send_telegram(chat_id, "Graphiti non disponible.")
+        return
+
+    try:
+        queued = await enqueue_graphiti_task(
+            content=args,
+            task_type="forget",
+            source_description="telegram /forget",
+        )
+        if queued:
+            await send_telegram(chat_id, "Demande d'oubli enregistree. Traitement en cours...")
+        else:
+            await send_telegram(chat_id, "Erreur lors de l'enregistrement.")
+    except Exception as e:
+        logger.error("Erreur /forget: %s", e)
+        await send_telegram(chat_id, f"Erreur: {e}")
+
+
+async def cmd_entity(chat_id: str, args: str):
+    """Commande /entity - Recuperer les faits lies a une entite."""
+    if not args:
+        await send_telegram(chat_id, "Usage: /entity &lt;nom&gt;")
+        return
+
+    if not graphiti.read_enabled:
+        await send_telegram(chat_id, "Lecture Graphiti non activee.")
+        return
+
+    try:
+        entity = await graphiti.get_entity(args)
+        if entity and entity.get("facts"):
+            facts_text = "\n".join(
+                f"- {f['fact']}" for f in entity["facts"][:10]
+            )
+            await send_telegram(
+                chat_id,
+                f"Entite '{args}' ({entity['facts_count']} faits):\n\n{facts_text}",
+            )
+        else:
+            await send_telegram(chat_id, f"Aucun fait trouve pour '{args}'.")
+    except Exception as e:
+        logger.error("Erreur /entity: %s", e)
+        await send_telegram(chat_id, f"Erreur: {e}")
+
+
+async def cmd_queue(chat_id: str, args: str):
+    """Commande /queue - Statut de la queue Graphiti."""
+    if not graphiti_worker:
+        await send_telegram(chat_id, "Worker Graphiti non actif.")
+        return
+
+    try:
+        stats = await graphiti_worker.get_queue_stats()
+        if "error" in stats:
+            await send_telegram(chat_id, f"Erreur queue: {stats['error']}")
+        else:
+            await send_telegram(
+                chat_id,
+                f"Queue Graphiti:\n"
+                f"- En attente: {stats['pending']}\n"
+                f"- En cours: {stats['processing']}\n"
+                f"- Terminees: {stats['done']}\n"
+                f"- Echouees: {stats['failed']}\n"
+                f"- Total: {stats['total']}",
+            )
+    except Exception as e:
+        logger.error("Erreur /queue: %s", e)
+        await send_telegram(chat_id, f"Erreur: {e}")
 
 
 # --- Utilitaires Telegram ---

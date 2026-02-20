@@ -26,15 +26,22 @@ services:
 
   # --- Neo4j (Knowledge Graph - Graphiti) ---
   neo4j:
-    image: neo4j:5.22.0
+    image: neo4j:5.26.0
     restart: unless-stopped
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_memory_heap_initial__size: "512m"
+      NEO4J_dbms_memory_heap_max__size: "512m"
+      NEO4J_dbms_memory_pagecache_size: "512m"
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
     healthcheck:
       test: ["CMD", "neo4j", "status"]
       interval: 15s
@@ -93,6 +100,8 @@ services:
     depends_on:
       zep:
         condition: service_healthy
+      neo4j:
+        condition: service_healthy
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
@@ -105,8 +114,14 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
       TELEGRAM_MODE: ${TELEGRAM_MODE:-polling}
       BOT_DOMAIN: ${BOT_DOMAIN:-}
-      NEO4J_URI: ${NEO4J_URI}
-      NEO4J_AUTH: ${NEO4J_AUTH}
+      # Graphiti / Neo4j
+      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://agea:password@postgres:5432/agea_memory}
+      GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-false}
+      GRAPHITI_READ_ENABLED: ${GRAPHITI_READ_ENABLED:-false}
+      SEMAPHORE_LIMIT: ${SEMAPHORE_LIMIT:-3}
     ports:
       - "8000:8000"
     healthcheck:

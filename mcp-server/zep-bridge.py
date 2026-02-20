@@ -84,6 +84,40 @@ async def save_memory(content: str, role: str = "assistant") -> str:
 
 
 @mcp.tool()
+async def search_facts(query: str, limit: int = 5) -> str:
+    """Cherche des faits structures dans le knowledge graph AGEA/Graphiti.
+
+    Preferer cette fonction a search_memory pour obtenir des faits
+    verifies et structures (entites, relations, temporalite).
+    Fallback automatique vers Zep si Graphiti non disponible.
+
+    Args:
+        query: La question ou le sujet a rechercher
+        limit: Nombre max de resultats (defaut: 5)
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{AGEA_URL}/api/facts",
+            params={"q": query, "limit": limit},
+            headers=_headers(),
+        )
+        if resp.status_code != 200:
+            return f"Erreur API: {resp.status_code} - {resp.text}"
+        data = resp.json()
+        source = data.get("source", "unknown")
+        results = data.get("results", [])
+        if not results:
+            return f"Aucun fait trouve pour '{query}'"
+        lines = []
+        for r in results:
+            fact = r.get("fact", "")
+            name = r.get("name", "")
+            prefix = f"[{name}] " if name else ""
+            lines.append(f"{prefix}{fact}")
+        return f"[{source}] {len(lines)} faits pour '{query}':\n" + "\n".join(lines)
+
+
+@mcp.tool()
 async def get_history(last_n: int = 10) -> str:
     """Recupere les N derniers messages de la memoire AGEA.
 
