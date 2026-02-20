@@ -6,3 +6,5 @@ python-dotenv==1.0.*
 # Phase 5 - Graphiti Knowledge Graph
 graphiti-core[google-genai]==0.28.1
 asyncpg==0.30.*
+# Phase 5.1 - Transcription vocale
+groq>=0.9.0

@@ -122,6 +122,8 @@ services:
       GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-false}
       GRAPHITI_READ_ENABLED: ${GRAPHITI_READ_ENABLED:-false}
       SEMAPHORE_LIMIT: ${SEMAPHORE_LIMIT:-3}
+      # Phase 5.1 - Vocal
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
     ports:
       - "8000:8000"
     healthcheck:

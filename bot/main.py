@@ -20,6 +20,7 @@ from llm_provider import LLMProvider
 from zep_client import ZepClient
 from graphiti_client import GraphitiClient
 from graphiti_worker import GraphitiWorker, enqueue_graphiti_task
+from voice_handler import VoiceHandler
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -35,11 +36,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agea")
 
-# --- LLM Provider + Zep + Graphiti ---
+# --- LLM Provider + Zep + Graphiti + Voice ---
 llm = LLMProvider()
 zep = ZepClient()
 graphiti = GraphitiClient()
 graphiti_worker = None  # Initialise dans le lifespan
+voice = VoiceHandler()
 
 
 @asynccontextmanager
@@ -140,12 +142,13 @@ async def status():
     """Statut detaille du systeme."""
     return {
         "service": "agea",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "llm_provider": llm.current_provider,
         "zep_url": ZEP_API_URL,
         "telegram_configured": bool(TELEGRAM_BOT_TOKEN),
         "graphiti_available": graphiti.available,
         "graphiti_read_enabled": graphiti.read_enabled,
+        "voice_available": voice.available,
     }
 
 
@@ -395,6 +398,13 @@ async def process_telegram_update(update: dict):
         logger.warning("Utilisateur non autorise: %s", user_id)
         return
 
+    # Message vocal ou audio
+    voice_data = message.get("voice") or message.get("audio")
+    if voice_data:
+        logger.info("Message vocal de %s (%ds)", user_id, voice_data.get("duration", 0))
+        await handle_voice(chat_id, voice_data)
+        return
+
     if not text:
         return
 
@@ -451,10 +461,81 @@ async def handle_message(chat_id: str, text: str):
     await cmd_ask(chat_id, text)
 
 
+async def handle_voice(chat_id: str, voice_data: dict):
+    """Traite un message vocal Telegram : transcription + memo/correct."""
+    if not voice.available:
+        await send_telegram(chat_id, "Transcription vocale non configuree (GROQ_API_KEY manquante).")
+        return
+
+    # 1. Feedback immediat
+    processing_msg_id = await send_telegram(chat_id, "Transcription en cours...", return_message_id=True)
+
+    try:
+        # 2. Telecharger le fichier vocal via l'API Telegram
+        file_id = voice_data.get("file_id")
+        async with httpx.AsyncClient() as client:
+            # Obtenir le file_path
+            resp = await client.get(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile",
+                params={"file_id": file_id},
+            )
+            file_path = resp.json().get("result", {}).get("file_path", "")
+            if not file_path:
+                await edit_telegram(chat_id, processing_msg_id, "Erreur: impossible de recuperer le fichier vocal.")
+                return
+
+            # Telecharger le fichier
+            resp = await client.get(
+                f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+            )
+            ogg_bytes = resp.content
+
+        # 3. Transcrire via Groq Whisper
+        text = await voice.transcribe(ogg_bytes)
+
+        if not text or len(text.strip()) < 3:
+            await edit_telegram(chat_id, processing_msg_id, "Transcription vide. Reessayez en parlant plus fort.")
+            return
+
+        logger.info("Vocal transcrit: %s", text[:100])
+
+        # 4. Detecter l'intention (memo ou correct)
+        intent = voice.detect_intent(text)
+
+        # 5. Traiter via le pipeline existant
+        if intent == "correct":
+            await enqueue_graphiti_task(
+                content=text,
+                task_type="correct",
+                source_description="vocal /correct",
+            )
+            await zep.add_memory(f"[CORRECTION VOCALE] {text}", role="user")
+            action = "Corrige"
+        else:
+            await zep.add_memory(f"[VOCAL] {text}", role="user")
+            await enqueue_graphiti_task(
+                content=text,
+                task_type="add_episode",
+                source_description="vocal /memo",
+            )
+            action = "Memorise"
+
+        # 6. Reponse avec le texte transcrit
+        await edit_telegram(
+            chat_id, processing_msg_id,
+            f"{action} (vocal):\n\n\"{text}\"\n\nStructuration en cours...",
+        )
+
+    except Exception as e:
+        logger.error("Erreur transcription vocale: %s", e)
+        await edit_telegram(chat_id, processing_msg_id, f"Erreur transcription: {str(e)[:100]}")
+
+
 # --- Commandes ---
 
 async def cmd_start(chat_id: str, args: str):
     """Commande /start - Bienvenue."""
+    voice_status = "actif" if voice.available else "inactif"
     await send_telegram(
         chat_id,
         "AGEA - Memoire Inter-IA\n\n"
@@ -466,7 +547,8 @@ async def cmd_start(chat_id: str, args: str):
         "/forget &lt;fait&gt; - Oublier un fait\n"
         "/entity &lt;nom&gt; - Infos sur une entite\n"
         "/queue - Statut de la queue\n"
-        "/status - Etat du systeme",
+        "/status - Etat du systeme\n\n"
+        f"Vocal: {voice_status} - envoyez un memo vocal!",
     )
 
 
@@ -474,12 +556,14 @@ async def cmd_status(chat_id: str, args: str):
     """Commande /status - Etat du systeme."""
     graphiti_status = "ON" if graphiti.available else "OFF"
     graphiti_read = "ON" if graphiti.read_enabled else "OFF"
+    voice_status = "ON" if voice.available else "OFF"
     await send_telegram(
         chat_id,
-        f"AGEA v2.0.0\n"
+        f"AGEA v2.1.0\n"
         f"LLM: {llm.current_provider}\n"
         f"Zep: {ZEP_API_URL}\n"
         f"Graphiti: {graphiti_status} (lecture: {graphiti_read})\n"
+        f"Vocal: {voice_status} (Groq Whisper)\n"
         f"Status: Operationnel",
     )
 
@@ -711,12 +795,30 @@ async def cmd_queue(chat_id: str, args: str):
 
 # --- Utilitaires Telegram ---
 
-async def send_telegram(chat_id: str, text: str):
-    """Envoie un message Telegram."""
+async def send_telegram(chat_id: str, text: str, return_message_id: bool = False):
+    """Envoie un message Telegram. Retourne le message_id si demande."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+        })
+        if return_message_id:
+            data = resp.json()
+            return data.get("result", {}).get("message_id")
+
+
+async def edit_telegram(chat_id: str, message_id: int, text: str):
+    """Edite un message Telegram existant."""
+    if not message_id:
+        await send_telegram(chat_id, text)
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
     async with httpx.AsyncClient() as client:
         await client.post(url, json={
             "chat_id": chat_id,
+            "message_id": message_id,
             "text": text,
             "parse_mode": "HTML",
         })
