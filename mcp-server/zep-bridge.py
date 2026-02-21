@@ -1,8 +1,9 @@
 """
-MCP Server Bridge — Memoire AGEA/Zep via API REST
-===================================================
-Expose 3 outils MCP (search_memory, save_memory, get_history)
-qui appellent les endpoints REST du bot AGEA (Phase 1).
+MCP Server Bridge — Memoire AGEA via API REST
+==============================================
+Expose 6 outils MCP :
+  - search_memory, save_memory, get_history (Zep)
+  - search_facts, get_entity, correct_fact (Graphiti)
 
 Transport : STDIO (pour Claude Code / Cursor)
 Config : variables AGEA_API_URL et AGEA_API_TOKEN
@@ -20,9 +21,10 @@ AGEA_TOKEN = os.getenv("AGEA_API_TOKEN", "")
 mcp = FastMCP(
     "zep-memory",
     instructions="Memoire persistante AGEA/HEXAGONE ENERGIE. "
-    "Utilise search_memory pour chercher du contexte, "
-    "save_memory pour sauvegarder des decisions/informations, "
-    "get_history pour voir l'historique recent.",
+    "Utilise search_memory/search_facts pour chercher du contexte, "
+    "get_entity pour les details d'une entite, "
+    "save_memory pour sauvegarder, correct_fact pour corriger un fait, "
+    "get_history pour l'historique recent.",
 )
 
 
@@ -115,6 +117,47 @@ async def search_facts(query: str, limit: int = 5) -> str:
             prefix = f"[{name}] " if name else ""
             lines.append(f"{prefix}{fact}")
         return f"[{source}] {len(lines)} faits pour '{query}':\n" + "\n".join(lines)
+
+
+@mcp.tool()
+async def get_entity(name: str) -> str:
+    """Recupere les details et relations d'une entite du knowledge graph.
+
+    Args:
+        name: Nom de l'entite (ex: "Mehdi", "HEXAGONE ENERGIE", "CNVL")
+    """
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            f"{AGEA_URL}/api/entity/{name}",
+            headers=_headers(),
+        )
+        if resp.status_code == 200:
+            return json.dumps(resp.json(), ensure_ascii=False, indent=2)
+        elif resp.status_code == 404:
+            return f"Entite '{name}' non trouvee dans le knowledge graph."
+        else:
+            return f"Erreur {resp.status_code}: {resp.text}"
+
+
+@mcp.tool()
+async def correct_fact(correction: str) -> str:
+    """Corrige un fait dans la memoire avec bi-temporalite.
+    L'ancien fait est invalide et le nouveau est enregistre.
+
+    Args:
+        correction: Description de la correction
+            (ex: "Pour le CNVL c'est de la tuile canal pas romaine")
+    """
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{AGEA_URL}/api/correct",
+            json={"content": correction},
+            headers=_headers(),
+        )
+        if resp.status_code == 200:
+            return f"Correction enregistree : {correction}\nTraitement asynchrone en cours (Worker → Graphiti)."
+        else:
+            return f"Erreur {resp.status_code}: {resp.text}"
 
 
 @mcp.tool()
