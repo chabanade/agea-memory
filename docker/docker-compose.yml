@@ -124,6 +124,12 @@ services:
       SEMAPHORE_LIMIT: ${SEMAPHORE_LIMIT:-3}
       # Phase 5.1 - Vocal
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # Phase 6D/6E - Resume quotidien + Relances proactives
+      MEHDI_CHAT_ID: ${MEHDI_CHAT_ID:-}
+      DAILY_SUMMARY_ENABLED: ${DAILY_SUMMARY_ENABLED:-true}
+      DAILY_SUMMARY_HOUR: ${DAILY_SUMMARY_HOUR:-20}
+      PROACTIVE_ENABLED: ${PROACTIVE_ENABLED:-true}
+      PROACTIVE_HOUR: ${PROACTIVE_HOUR:-8}
     ports:
       - "8000:8000"
     healthcheck:

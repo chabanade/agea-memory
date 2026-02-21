@@ -14,14 +14,6 @@ import tempfile
 
 logger = logging.getLogger("agea.voice")
 
-# Marqueurs de correction (francais)
-CORRECTION_MARKERS = [
-    "finalement", "en fait", "correction", "rectification",
-    "je corrige", "je rectifie", "c'est pas", "c'est plutôt",
-    "non en fait", "au final", "erreur", "je me suis trompé",
-    "il faut changer", "remplacer par",
-]
-
 # Prompt de contexte Whisper pour termes metier
 WHISPER_PROMPT = os.getenv(
     "WHISPER_PROMPT",
@@ -71,11 +63,4 @@ class VoiceHandler:
         finally:
             os.unlink(tmp_path)
 
-    @staticmethod
-    def detect_intent(text: str) -> str:
-        """Detecte si le texte est une correction ou un memo."""
-        text_lower = text.lower()
-        for marker in CORRECTION_MARKERS:
-            if marker in text_lower:
-                return "correct"
-        return "memo"
+    # detect_intent retire — utiliser intent_detector.detect_intent() a la place

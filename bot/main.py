@@ -21,6 +21,9 @@ from zep_client import ZepClient
 from graphiti_client import GraphitiClient
 from graphiti_worker import GraphitiWorker, enqueue_graphiti_task
 from voice_handler import VoiceHandler
+from intent_detector import detect_intent, detect_business_tag, format_response, tag_content
+from daily_summary import DailySummary
+from proactive import ProactiveAgent
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -28,6 +31,7 @@ TELEGRAM_ALLOWED_USERS = os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
 ZEP_API_URL = os.getenv("ZEP_API_URL", "http://localhost:8080")
 ZEP_SECRET_KEY = os.getenv("ZEP_SECRET_KEY", "")
 TELEGRAM_MODE = os.getenv("TELEGRAM_MODE", "polling")  # "polling" ou "webhook"
+MEHDI_CHAT_ID = os.getenv("MEHDI_CHAT_ID", "")  # Chat ID Telegram de Mehdi (Phase 6D/6E)
 
 # --- Logging ---
 logging.basicConfig(
@@ -65,6 +69,20 @@ async def lifespan(app: FastAPI):
         worker_task = asyncio.create_task(graphiti_worker.run())
         logger.info("Worker Graphiti lance en arriere-plan")
 
+    # Lancer les crons Phase 6D/6E (resume quotidien + relances proactives)
+    summary_task = None
+    proactive_task = None
+    if MEHDI_CHAT_ID:
+        summary = DailySummary(MEHDI_CHAT_ID, send_telegram, graphiti)
+        summary_task = asyncio.create_task(summary.run())
+        logger.info("Cron resume quotidien lance")
+
+        proactive = ProactiveAgent(MEHDI_CHAT_ID, send_telegram, graphiti)
+        proactive_task = asyncio.create_task(proactive.run())
+        logger.info("Cron relances proactives lance")
+    else:
+        logger.info("MEHDI_CHAT_ID non configure — crons 6D/6E desactives")
+
     polling_task = None
     if TELEGRAM_MODE == "polling":
         # Supprimer tout webhook existant avant de passer en polling
@@ -92,6 +110,10 @@ async def lifespan(app: FastAPI):
         worker_task.cancel()
     if polling_task:
         polling_task.cancel()
+    if summary_task:
+        summary_task.cancel()
+    if proactive_task:
+        proactive_task.cancel()
     await graphiti.close()
     logger.info("AGEA arrete")
 
@@ -142,7 +164,7 @@ async def status():
     """Statut detaille du systeme."""
     return {
         "service": "agea",
-        "version": "2.1.0",
+        "version": "3.0.0",
         "llm_provider": llm.current_provider,
         "zep_url": ZEP_API_URL,
         "telegram_configured": bool(TELEGRAM_BOT_TOKEN),
@@ -333,6 +355,18 @@ async def api_graphiti_queue(
     return await graphiti_worker.get_queue_stats()
 
 
+@app.get("/api/stats/today", tags=["stats"], operation_id="statsToday",
+         summary="Statistiques du jour (memos, tags, corrections)")
+async def api_stats_today(
+    authorization: str = Header(default=""),
+):
+    """Retourne les stats du jour pour le resume quotidien."""
+    await verify_bearer(authorization)
+    summary = DailySummary("", send_telegram, graphiti)
+    stats = await summary._get_today_stats()
+    return stats
+
+
 @app.post("/api/admin/reindex", tags=["admin"], operation_id="adminReindex",
           summary="Re-enqueue les messages Zep dans Graphiti")
 async def api_admin_reindex(
@@ -457,8 +491,56 @@ async def handle_command(chat_id: str, text: str):
 
 
 async def handle_message(chat_id: str, text: str):
-    """Traite un message texte libre (equivalent de /ask)."""
-    await cmd_ask(chat_id, text)
+    """Traite un message texte libre par detection d'intention (Phase 6A)."""
+    intent = detect_intent(text)
+    logger.info("Intent detecte: %s pour: %s", intent, text[:80])
+
+    if intent == "question":
+        await cmd_ask(chat_id, text)
+    elif intent == "correction":
+        await route_memo(chat_id, text, intent="correction")
+    elif intent == "forget":
+        await route_memo(chat_id, text, intent="forget")
+    else:
+        await route_memo(chat_id, text, intent="memo")
+
+
+async def route_memo(chat_id: str, text: str, intent: str = "memo", vocal: bool = False):
+    """Route un memo/correction/forget avec tags metier (Phase 6B)."""
+    tag = detect_business_tag(text)
+    tagged = tag_content(text, tag)
+
+    try:
+        if intent == "correction":
+            if graphiti.available:
+                await enqueue_graphiti_task(
+                    content=text,
+                    task_type="correct",
+                    source_description=f"telegram-{'vocal' if vocal else 'texte'}-correction",
+                )
+            await zep.add_memory(f"[CORRECTION] {tagged}", role="user")
+        elif intent == "forget":
+            if graphiti.available:
+                await enqueue_graphiti_task(
+                    content=text,
+                    task_type="forget",
+                    source_description=f"telegram-{'vocal' if vocal else 'texte'}-forget",
+                )
+            await zep.add_memory(f"[FORGET] {tagged}", role="user")
+        else:
+            await zep.add_memory(tagged, role="user")
+            if graphiti.available:
+                await enqueue_graphiti_task(
+                    content=tagged,
+                    task_type="add_episode",
+                    source_description=f"telegram-{'vocal' if vocal else 'texte'}-{tag or 'info'}",
+                )
+
+        response = format_response(intent, tag, text, vocal=vocal)
+        await send_telegram(chat_id, response)
+    except Exception as e:
+        logger.error("Erreur route_memo: %s", e)
+        await send_telegram(chat_id, f"Erreur: {e}")
 
 
 async def handle_voice(chat_id: str, voice_data: dict):
@@ -499,32 +581,47 @@ async def handle_voice(chat_id: str, voice_data: dict):
 
         logger.info("Vocal transcrit: %s", text[:100])
 
-        # 4. Detecter l'intention (memo ou correct)
-        intent = voice.detect_intent(text)
+        # 4. Detecter l'intention via intent_detector (Phase 6A)
+        intent = detect_intent(text)
+        tag = detect_business_tag(text)
+        tagged = tag_content(text, tag)
+        logger.info("Vocal intent: %s, tag: %s", intent, tag)
 
-        # 5. Traiter via le pipeline existant
-        if intent == "correct":
-            await enqueue_graphiti_task(
-                content=text,
-                task_type="correct",
-                source_description="vocal /correct",
-            )
-            await zep.add_memory(f"[CORRECTION VOCALE] {text}", role="user")
-            action = "Corrige"
+        # 5. Traiter selon l'intention
+        if intent == "question":
+            # Supprimer le message "Transcription..." et repondre via cmd_ask
+            await edit_telegram(chat_id, processing_msg_id, f"\U0001f3a4 \"{text}\"\n\n\U0001f50d Recherche en cours...")
+            await cmd_ask(chat_id, text)
+            return
+
+        if intent == "correction":
+            if graphiti.available:
+                await enqueue_graphiti_task(
+                    content=text,
+                    task_type="correct",
+                    source_description=f"vocal-correction",
+                )
+            await zep.add_memory(f"[CORRECTION] {tagged}", role="user")
+        elif intent == "forget":
+            if graphiti.available:
+                await enqueue_graphiti_task(
+                    content=text,
+                    task_type="forget",
+                    source_description=f"vocal-forget",
+                )
+            await zep.add_memory(f"[FORGET] {tagged}", role="user")
         else:
-            await zep.add_memory(f"[VOCAL] {text}", role="user")
-            await enqueue_graphiti_task(
-                content=text,
-                task_type="add_episode",
-                source_description="vocal /memo",
-            )
-            action = "Memorise"
+            await zep.add_memory(f"[VOCAL] {tagged}", role="user")
+            if graphiti.available:
+                await enqueue_graphiti_task(
+                    content=tagged,
+                    task_type="add_episode",
+                    source_description=f"vocal-{tag or 'info'}",
+                )
 
-        # 6. Reponse avec le texte transcrit
-        await edit_telegram(
-            chat_id, processing_msg_id,
-            f"{action} (vocal):\n\n\"{text}\"\n\nStructuration en cours...",
-        )
+        # 6. Reponse formatee avec le texte transcrit
+        response = format_response(intent, tag, text, vocal=True)
+        await edit_telegram(chat_id, processing_msg_id, response)
 
     except Exception as e:
         logger.error("Erreur transcription vocale: %s", e)
@@ -538,17 +635,16 @@ async def cmd_start(chat_id: str, args: str):
     voice_status = "actif" if voice.available else "inactif"
     await send_telegram(
         chat_id,
-        "AGEA - Memoire Inter-IA\n\n"
-        "Commandes disponibles:\n"
-        "/ask &lt;question&gt; - Interroger la memoire\n"
-        "/memo &lt;texte&gt; - Enregistrer une information\n"
-        "/projet &lt;nom&gt; - Contexte d'un projet\n"
-        "/correct &lt;fait&gt; - Corriger un fait\n"
-        "/forget &lt;fait&gt; - Oublier un fait\n"
-        "/entity &lt;nom&gt; - Infos sur une entite\n"
-        "/queue - Statut de la queue\n"
-        "/status - Etat du systeme\n\n"
-        f"Vocal: {voice_status} - envoyez un memo vocal!",
+        "AGEA v3.0 - Memoire Inter-IA\n\n"
+        "Parlez-moi naturellement :\n"
+        "\U0001f4dd Ecrivez une info \u2192 memorisee\n"
+        "\u2753 Posez une question \u2192 reponse\n"
+        "\u270f\ufe0f \"Finalement...\" \u2192 correction\n"
+        "\U0001f5d1\ufe0f \"Oublie...\" \u2192 suppression\n"
+        "\U0001f3a4 Envoyez un vocal \u2192 transcrit + route\n\n"
+        "Commandes rapides :\n"
+        "/memo /ask /correct /forget /entity /projet /queue /status\n\n"
+        f"Vocal: {voice_status}",
     )
 
 
@@ -559,7 +655,7 @@ async def cmd_status(chat_id: str, args: str):
     voice_status = "ON" if voice.available else "OFF"
     await send_telegram(
         chat_id,
-        f"AGEA v2.1.0\n"
+        f"AGEA v3.0.0\n"
         f"LLM: {llm.current_provider}\n"
         f"Zep: {ZEP_API_URL}\n"
         f"Graphiti: {graphiti_status} (lecture: {graphiti_read})\n"
