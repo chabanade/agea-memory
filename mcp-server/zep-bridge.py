@@ -2,7 +2,7 @@
 MCP Server Bridge — Memoire AGEA via API REST
 ==============================================
 Expose 6 outils MCP :
-  - search_memory, save_memory, get_history (Zep)
+  - search_memory, save_memory, get_history (PostgreSQL + Graphiti)
   - search_facts, get_entity, correct_fact (Graphiti)
 
 Transport : STDIO (pour Claude Code / Cursor)
@@ -37,7 +37,7 @@ def _headers() -> dict:
 
 @mcp.tool()
 async def search_memory(query: str, limit: int = 5) -> str:
-    """Cherche dans la memoire AGEA/Zep par recherche semantique.
+    """Cherche dans la memoire AGEA par recherche semantique.
 
     Args:
         query: La question ou le sujet a rechercher
@@ -65,7 +65,7 @@ async def search_memory(query: str, limit: int = 5) -> str:
 
 @mcp.tool()
 async def save_memory(content: str, role: str = "assistant") -> str:
-    """Sauvegarde une information dans la memoire AGEA/Zep.
+    """Sauvegarde une information dans la memoire AGEA.
 
     Args:
         content: L'information a sauvegarder
@@ -91,7 +91,6 @@ async def search_facts(query: str, limit: int = 5) -> str:
 
     Preferer cette fonction a search_memory pour obtenir des faits
     verifies et structures (entites, relations, temporalite).
-    Fallback automatique vers Zep si Graphiti non disponible.
 
     Args:
         query: La question ou le sujet a rechercher

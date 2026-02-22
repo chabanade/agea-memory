@@ -6,7 +6,7 @@
 # ===========================================
 
 services:
-  # --- PostgreSQL (metadata Zep + Graphiti) ---
+  # --- PostgreSQL (conversations + Graphiti queue) ---
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
@@ -50,47 +50,6 @@ services:
     networks:
       - agea
 
-  # --- Zep NLP Server (Embeddings locaux) ---
-  zep-nlp:
-    image: ghcr.io/getzep/zep-nlp-server:latest
-    restart: unless-stopped
-    environment:
-      ENABLE_EMBEDDINGS: "true"
-    healthcheck:
-      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/5557"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 60s
-    networks:
-      - agea
-
-  # --- Zep (Memory Engine) ---
-  zep:
-    image: ghcr.io/getzep/zep:latest
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      zep-nlp:
-        condition: service_healthy
-    environment:
-      # Secrets via env vars (jamais dans config.yaml)
-      ZEP_OPENAI_API_KEY: ${GOOGLE_API_KEY}
-      ZEP_STORE_POSTGRES_DSN: ${POSTGRES_DSN}
-      ZEP_AUTH_SECRET: ${ZEP_SECRET_KEY}
-    volumes:
-      - ./zep/config.yaml:/app/config.yaml
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8080"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-    networks:
-      - agea
-
   # --- Bot AGEA (FastAPI + Telegram) ---
   bot:
     build:
@@ -98,15 +57,14 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      zep:
+      postgres:
         condition: service_healthy
       neo4j:
         condition: service_healthy
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
-      ZEP_API_URL: http://zep:8080
-      ZEP_SECRET_KEY: ${ZEP_SECRET_KEY}
+      ZEP_SECRET_KEY: ${ZEP_SECRET_KEY}  # Retrocompat: utilise comme AGEA_API_TOKEN
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -146,7 +104,6 @@ services:
     restart: unless-stopped
     depends_on:
       - bot
-      - zep
     environment:
       BOT_DOMAIN: ${BOT_DOMAIN:-srv987452.hstgr.cloud}
     ports:

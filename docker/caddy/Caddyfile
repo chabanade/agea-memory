@@ -53,14 +53,9 @@
 		reverse_proxy bot:8000
 	}
 
-	# API Zep interne (memoire directe)
+	# Catch-all API -> Bot
 	handle /api/* {
-		reverse_proxy zep:8080
-	}
-
-	# Zep healthcheck
-	handle /healthz {
-		reverse_proxy zep:8080
+		reverse_proxy bot:8000
 	}
 
 	# Par defaut -> bot
