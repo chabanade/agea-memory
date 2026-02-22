@@ -7,7 +7,7 @@ et la bi-temporalite dans Neo4j via graphiti-core.
 Architecture sidecar asynchrone :
 - Le Bot appelle UNIQUEMENT search() et get_entity() (lecture)
 - Le Worker appelle add_episode() et correct_fact() (ecriture)
-- Flag _available pour degradation gracieuse vers Zep
+- Flag _available pour degradation gracieuse
 
 Patch DeepSeek : OpenAIGenericClient envoie response_format json_schema
 que DeepSeek ne supporte pas. DeepSeekLLMClient injecte le schema dans
@@ -132,7 +132,7 @@ class GraphitiClient:
     async def initialize(self) -> bool:
         """
         Initialise la connexion Graphiti + Neo4j.
-        Retourne True si OK, False si echec (mode degrade Zep).
+        Retourne True si OK, False si echec.
         """
         if not GRAPHITI_ENABLED:
             logger.info("Graphiti desactive (GRAPHITI_ENABLED=false)")

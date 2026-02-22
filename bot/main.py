@@ -2,7 +2,7 @@
 AGEA - Bot Telegram + API FastAPI
 ==================================
 Source canonique unique pour la memoire inter-IA.
-Recoit les messages Telegram, interroge Zep/Graphiti, repond.
+Recoit les messages Telegram, interroge Graphiti/PostgreSQL, repond.
 """
 
 import os
@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from llm_provider import LLMProvider
-from zep_client import ZepClient
+from conversation_store import ConversationStore
 from graphiti_client import GraphitiClient
 from graphiti_worker import GraphitiWorker, enqueue_graphiti_task
 from voice_handler import VoiceHandler
@@ -28,8 +28,7 @@ from proactive import ProactiveAgent
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_ALLOWED_USERS = os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
-ZEP_API_URL = os.getenv("ZEP_API_URL", "http://localhost:8080")
-ZEP_SECRET_KEY = os.getenv("ZEP_SECRET_KEY", "")
+AGEA_API_TOKEN = os.getenv("ZEP_SECRET_KEY", os.getenv("AGEA_API_TOKEN", ""))
 TELEGRAM_MODE = os.getenv("TELEGRAM_MODE", "polling")  # "polling" ou "webhook"
 MEHDI_CHAT_ID = os.getenv("MEHDI_CHAT_ID", "")  # Chat ID Telegram de Mehdi (Phase 6D/6E)
 
@@ -40,9 +39,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agea")
 
-# --- LLM Provider + Zep + Graphiti + Voice ---
+# --- LLM Provider + Conversations + Graphiti + Voice ---
 llm = LLMProvider()
-zep = ZepClient()
+conversations = ConversationStore()
 graphiti = GraphitiClient()
 graphiti_worker = None  # Initialise dans le lifespan
 voice = VoiceHandler()
@@ -53,7 +52,10 @@ async def lifespan(app: FastAPI):
     """Demarrage et arret de l'application."""
     global graphiti_worker
     logger.info("AGEA demarre - LLM: %s, Mode: %s", llm.current_provider, TELEGRAM_MODE)
-    logger.info("Zep API: %s", ZEP_API_URL)
+
+    # Initialiser le store de conversations (PostgreSQL)
+    await conversations.initialize()
+    logger.info("ConversationStore: PostgreSQL")
 
     # Initialiser Graphiti (non-bloquant si desactive ou echec)
     graphiti_ok = await graphiti.initialize()
@@ -114,6 +116,7 @@ async def lifespan(app: FastAPI):
         summary_task.cancel()
     if proactive_task:
         proactive_task.cancel()
+    await conversations.close()
     await graphiti.close()
     logger.info("AGEA arrete")
 
@@ -123,10 +126,10 @@ app = FastAPI(
     description=(
         "API de memoire partagee pour HEXAGONE ENERGIE / Tesla Electric. "
         "Permet a toute IA (ChatGPT, Gemini, Claude, etc.) de lire et ecrire "
-        "dans la memoire persistante Zep via recherche semantique. "
+        "dans la memoire persistante Graphiti via recherche semantique. "
         "Authentification par Bearer token obligatoire."
     ),
-    version="1.0.0",
+    version="4.0.0",
     lifespan=lifespan,
     servers=[{"url": "https://srv987452.hstgr.cloud", "description": "Production VPS"}],
 )
@@ -166,7 +169,7 @@ async def status():
         "service": "agea",
         "version": "3.0.0",
         "llm_provider": llm.current_provider,
-        "zep_url": ZEP_API_URL,
+        "store": "postgresql",
         "telegram_configured": bool(TELEGRAM_BOT_TOKEN),
         "graphiti_available": graphiti.available,
         "graphiti_read_enabled": graphiti.read_enabled,
@@ -176,7 +179,7 @@ async def status():
 
 # --- API REST Bridge (Phase 1 - Bridge Universel Inter-IA) ---
 
-API_TOKEN = os.getenv("ZEP_SECRET_KEY", "")
+API_TOKEN = AGEA_API_TOKEN
 
 
 async def verify_bearer(authorization: str = Header(default="")) -> None:
@@ -206,14 +209,21 @@ async def api_get_context(
     session_id: str = "mehdi-agea",
     authorization: str = Header(default=""),
 ):
-    """Cherche dans la memoire AGEA par recherche semantique.
+    """Cherche dans la memoire AGEA par recherche semantique via Graphiti.
     Appeler cette route AVANT de repondre a l'utilisateur pour recuperer
     du contexte pertinent (projets, decisions, clients, certifications).
-    Retourne les resultats tries par score de pertinence."""
+    Retourne les resultats tries par pertinence."""
     await verify_bearer(authorization)
-    results = await zep.search(q, limit=limit, session_id=session_id)
-    filtered = [r for r in results if r["score"] > 0.3]
-    return {"query": q, "results": filtered, "count": len(filtered)}
+
+    results = []
+    if graphiti.read_enabled:
+        facts = await graphiti.search(q, num_results=limit)
+        results = [
+            {"content": f["fact"], "role": "", "score": 0.9}
+            for f in facts if f.get("fact")
+        ]
+
+    return {"query": q, "results": results, "count": len(results)}
 
 
 @app.post("/api/memo", tags=["bridge"], operation_id="saveMemo",
@@ -226,7 +236,7 @@ async def api_post_memo(
     Appeler cette route APRES chaque echange important pour persister
     les decisions, informations client, ou connaissances acquises."""
     await verify_bearer(authorization)
-    ok = await zep.add_memory(req.content, role=req.role, session_id=req.session_id)
+    ok = await conversations.add_memory(req.content, role=req.role, session_id=req.session_id)
 
     # Queue Graphiti async (si active)
     queued = False
@@ -251,7 +261,7 @@ async def api_get_history(
     Utile pour reconstruire le contexte complet d'une conversation
     ou voir les echanges recents avec d'autres IAs."""
     await verify_bearer(authorization)
-    memory = await zep.get_memory(session_id=session_id, last_n=last_n)
+    memory = await conversations.get_memory(session_id=session_id, last_n=last_n)
     return memory or {"messages": []}
 
 
@@ -264,34 +274,23 @@ class CorrectRequest(BaseModel):
 
 
 @app.get("/api/facts", tags=["graphiti"], operation_id="searchFacts",
-         summary="Recherche dans le knowledge graph (fallback Zep)")
+         summary="Recherche dans le knowledge graph Graphiti")
 async def api_get_facts(
     q: str,
     limit: int = 5,
     authorization: str = Header(default=""),
 ):
-    """Recherche hybride dans le knowledge graph Graphiti.
-    0 appels LLM (seulement 1 embedding) = sub-second.
-    Fallback automatique vers Zep si Graphiti non disponible."""
+    """Recherche dans le knowledge graph Graphiti.
+    0 appels LLM (seulement 1 embedding) = sub-second."""
     await verify_bearer(authorization)
 
-    source = "zep"
     results = []
 
     if graphiti.read_enabled:
         facts = await graphiti.search(q, num_results=limit)
-        if facts:
-            source = "graphiti"
-            results = [{"fact": f["fact"], "name": f.get("name", "")} for f in facts]
+        results = [{"fact": f["fact"], "name": f.get("name", "")} for f in facts if f.get("fact")]
 
-    if not results:
-        zep_results = await zep.search(q, limit=limit)
-        results = [
-            {"fact": r["content"], "name": "", "score": r["score"]}
-            for r in zep_results if r["score"] > 0.3
-        ]
-
-    return {"query": q, "source": source, "results": results, "count": len(results)}
+    return {"query": q, "source": "graphiti", "results": results, "count": len(results)}
 
 
 @app.post("/api/correct", tags=["graphiti"], operation_id="correctFact",
@@ -368,19 +367,19 @@ async def api_stats_today(
 
 
 @app.post("/api/admin/reindex", tags=["admin"], operation_id="adminReindex",
-          summary="Re-enqueue les messages Zep dans Graphiti")
+          summary="Re-enqueue les messages dans Graphiti")
 async def api_admin_reindex(
     last_n: int = 50,
     authorization: str = Header(default=""),
 ):
-    """Relit les N derniers messages Zep et les enqueue pour Graphiti.
+    """Relit les N derniers messages et les enqueue pour Graphiti.
     Idempotent grace a message_uuid UNIQUE + ON CONFLICT DO NOTHING."""
     await verify_bearer(authorization)
 
     if not graphiti.available:
         raise HTTPException(status_code=503, detail="Graphiti non disponible")
 
-    memory = await zep.get_memory(session_id="mehdi-agea", last_n=last_n)
+    memory = await conversations.get_memory(session_id="mehdi-agea", last_n=last_n)
     messages = memory.get("messages", []) if memory else []
 
     enqueued = 0
@@ -390,7 +389,7 @@ async def api_admin_reindex(
             ok = await enqueue_graphiti_task(
                 content=content,
                 task_type="add_episode",
-                source_description="reindex zep",
+                source_description="reindex conversations",
             )
             if ok:
                 enqueued += 1
@@ -518,7 +517,7 @@ async def route_memo(chat_id: str, text: str, intent: str = "memo", vocal: bool 
                     task_type="correct",
                     source_description=f"telegram-{'vocal' if vocal else 'texte'}-correction",
                 )
-            await zep.add_memory(f"[CORRECTION] {tagged}", role="user")
+            await conversations.add_memory(f"[CORRECTION] {tagged}", role="user")
         elif intent == "forget":
             if graphiti.available:
                 await enqueue_graphiti_task(
@@ -526,9 +525,9 @@ async def route_memo(chat_id: str, text: str, intent: str = "memo", vocal: bool 
                     task_type="forget",
                     source_description=f"telegram-{'vocal' if vocal else 'texte'}-forget",
                 )
-            await zep.add_memory(f"[FORGET] {tagged}", role="user")
+            await conversations.add_memory(f"[FORGET] {tagged}", role="user")
         else:
-            await zep.add_memory(tagged, role="user")
+            await conversations.add_memory(tagged, role="user")
             if graphiti.available:
                 await enqueue_graphiti_task(
                     content=tagged,
@@ -601,7 +600,7 @@ async def handle_voice(chat_id: str, voice_data: dict):
                     task_type="correct",
                     source_description=f"vocal-correction",
                 )
-            await zep.add_memory(f"[CORRECTION] {tagged}", role="user")
+            await conversations.add_memory(f"[CORRECTION] {tagged}", role="user")
         elif intent == "forget":
             if graphiti.available:
                 await enqueue_graphiti_task(
@@ -609,9 +608,9 @@ async def handle_voice(chat_id: str, voice_data: dict):
                     task_type="forget",
                     source_description=f"vocal-forget",
                 )
-            await zep.add_memory(f"[FORGET] {tagged}", role="user")
+            await conversations.add_memory(f"[FORGET] {tagged}", role="user")
         else:
-            await zep.add_memory(f"[VOCAL] {tagged}", role="user")
+            await conversations.add_memory(f"[VOCAL] {tagged}", role="user")
             if graphiti.available:
                 await enqueue_graphiti_task(
                     content=tagged,
@@ -635,7 +634,7 @@ async def cmd_start(chat_id: str, args: str):
     voice_status = "actif" if voice.available else "inactif"
     await send_telegram(
         chat_id,
-        "AGEA v3.0 - Memoire Inter-IA\n\n"
+        "AGEA v4.0 - Memoire Inter-IA\n\n"
         "Parlez-moi naturellement :\n"
         "\U0001f4dd Ecrivez une info \u2192 memorisee\n"
         "\u2753 Posez une question \u2192 reponse\n"
@@ -655,9 +654,9 @@ async def cmd_status(chat_id: str, args: str):
     voice_status = "ON" if voice.available else "OFF"
     await send_telegram(
         chat_id,
-        f"AGEA v3.0.0\n"
+        f"AGEA v4.0.0\n"
         f"LLM: {llm.current_provider}\n"
-        f"Zep: {ZEP_API_URL}\n"
+        f"Store: PostgreSQL\n"
         f"Graphiti: {graphiti_status} (lecture: {graphiti_read})\n"
         f"Vocal: {voice_status} (Groq Whisper)\n"
         f"Status: Operationnel",
@@ -665,14 +664,14 @@ async def cmd_status(chat_id: str, args: str):
 
 
 async def cmd_ask(chat_id: str, args: str):
-    """Commande /ask - Interroger la memoire via Graphiti/Zep + LLM."""
+    """Commande /ask - Interroger la memoire via Graphiti + LLM."""
     if not args:
         await send_telegram(chat_id, "Usage: /ask &lt;ta question&gt;")
         return
 
     try:
         context_parts = []
-        source_tag = "Zep"
+        source_tag = "Graphiti"
 
         # 1. Recherche Graphiti prioritaire (0 appels LLM, sub-second)
         if graphiti.read_enabled:
@@ -684,13 +683,14 @@ async def cmd_ask(chat_id: str, args: str):
             if context_parts:
                 source_tag = "Graphiti"
 
-        # 2. Fallback Zep si pas de resultats Graphiti
+        # 2. Fallback historique si pas de resultats Graphiti
         if not context_parts:
-            zep_results = await zep.search(args, limit=5)
-            for r in zep_results:
-                if r["content"] and r["score"] > 0.5 and r["content"] != args:
-                    context_parts.append(r["content"])
-            source_tag = "Zep"
+            history = await conversations.get_memory(last_n=5)
+            if history:
+                for msg in history.get("messages", []):
+                    if msg.get("content") and msg["content"] != args:
+                        context_parts.append(msg["content"])
+            source_tag = "Historique"
 
         # 3. Construire le prompt avec contexte memoire
         system_prompt = (
@@ -721,9 +721,9 @@ async def cmd_ask(chat_id: str, args: str):
         response = response.replace("Hexagon ENR", "Hexagone Energie")
         response = response.replace("hexagon enr", "Hexagone Energie")
 
-        # 6. Sauvegarder l'echange dans Zep
-        await zep.add_memory(args, role="user")
-        await zep.add_memory(response, role="assistant")
+        # 6. Sauvegarder l'echange dans l'historique
+        await conversations.add_memory(args, role="user")
+        await conversations.add_memory(response, role="assistant")
 
         # 7. Ajouter indicateur source memoire
         if context_parts:
@@ -736,14 +736,14 @@ async def cmd_ask(chat_id: str, args: str):
 
 
 async def cmd_memo(chat_id: str, args: str):
-    """Commande /memo - Enregistrer dans Zep (sync) + queue Graphiti (async)."""
+    """Commande /memo - Enregistrer dans PostgreSQL (sync) + queue Graphiti (async)."""
     if not args:
         await send_telegram(chat_id, "Usage: /memo &lt;information a retenir&gt;")
         return
 
     try:
-        # 1. Zep sync (reponse immediate)
-        ok = await zep.add_memory(args, role="user")
+        # 1. PostgreSQL sync (reponse immediate)
+        ok = await conversations.add_memory(args, role="user")
 
         # 2. Queue Graphiti async (si active)
         queued = False
