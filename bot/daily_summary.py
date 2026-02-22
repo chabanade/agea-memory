@@ -95,6 +95,8 @@ class DailySummary:
         # Detail par tag metier
         tag_emojis = {
             "decision": "\U0001f4cc",
+            "doute": "\u2753",
+            "lecon": "\U0001f4a1",
             "probleme": "\u26a0\ufe0f",
             "rappel": "\u23f0",
             "option": "\U0001f504",
@@ -122,6 +124,8 @@ class DailySummary:
             lines.append(f"\u2014 \u26a0\ufe0f {queue['failed']} t\u00e2che(s) Graphiti en \u00e9chec")
         if queue.get("pending", 0) > 0:
             lines.append(f"\u2014 {queue['pending']} t\u00e2che(s) en attente")
+        if queue.get("review", 0) > 0:
+            lines.append(f"\u2014 \u23f3 {queue['review']} t\u00e2che(s) en review (/review)")
 
         return "\n".join(lines)
 
@@ -160,11 +164,18 @@ class DailySummary:
                     if "vocal" in source:
                         stats["vocal"] += 1
 
-                    # Compter les tags metier
-                    content_upper = content[:20].upper()
-                    for tag in ["decision", "probleme", "rappel", "option", "constat"]:
+                    # Compter les tags metier (contenu prefix + raisonnement source)
+                    content_upper = content[:30].upper()
+                    for tag in ["decision", "doute", "lecon", "probleme", "rappel", "option", "constat"]:
                         if f"[{tag.upper()}]" in content_upper:
                             stats[tag] = stats.get(tag, 0) + 1
+                    # Phase 7 : comptage via source_description raisonnement
+                    if "raisonnement-decision" in source:
+                        stats["decision"] = stats.get("decision", 0) + 1
+                    elif "raisonnement-doute" in source:
+                        stats["doute"] = stats.get("doute", 0) + 1
+                    elif "raisonnement-lecon" in source:
+                        stats["lecon"] = stats.get("lecon", 0) + 1
 
                 return stats
             finally:
@@ -208,6 +219,7 @@ class DailySummary:
                 return {
                     "pending": stats.get("pending", 0),
                     "failed": stats.get("failed", 0),
+                    "review": stats.get("review", 0),
                 }
             finally:
                 await conn.close()

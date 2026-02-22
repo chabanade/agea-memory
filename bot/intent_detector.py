@@ -1,9 +1,12 @@
 """
-IntentDetector - Detection d'intention + tags metier (Phase 6A/6B)
-==================================================================
+IntentDetector - Detection d'intention + tags metier (Phase 6A/6B + Phase 7)
+=============================================================================
 Detecte automatiquement l'intention (question/memo/correction/forget)
-et la categorie metier (decision/probleme/rappel/option/constat)
+et la categorie metier (decision/doute/lecon/probleme/rappel/option/constat)
 via regex. Zero appel LLM, zero latence, zero cout.
+
+Phase 7 : ajout tags raisonnement (doute, lecon) avec precedence
+sur rappel/option pour eviter les faux positifs.
 """
 
 import re
@@ -34,18 +37,31 @@ INTENT_PATTERNS = {
 
 # --- Phase 6B : Tags metier ---
 
+# Ordre = precedence de detection. decision/lecon/doute AVANT rappel/option
+# pour eviter que "il faut toujours verifier" soit detecte comme rappel.
 BUSINESS_TAGS = {
     "decision": [
         r"(on a d[eé]cid[eé]|d[eé]cision|on prend|on choisit|c['\u2019]est valid[eé]|on part sur|on retient)",
         r"(validation|valid[eé] par|approuv[eé])",
     ],
-    "option": [
-        r"(on h[eé]site|option|alternative|soit .+ soit|ou bien|[aà] voir)",
-        r"(proposition|on envisage|[eé]ventuellement)",
+    "lecon": [
+        r"(le[cç]on|on a appris|ne plus jamais|dor[eé]navant)",
+        r"(pi[eè]ge|retenir que|la prochaine fois)",
+        r"(ne jamais|toujours v[eé]rifier|r[eè]gle\b)",
+        r"(erreur.+correction|erreur.+maintenant)",
+    ],
+    "doute": [
+        r"(j['\u2019]h[eé]site|on h[eé]site entre|pas s[uû]r|incertain|je sais pas)",
+        r"(je me demande|on devrait|faut.il|vaut.il mieux)",
+        r"(dilemme|h[eé]sitation)",
     ],
     "probleme": [
         r"(probl[eè]me|souci|blocage|bloqu[eé]|[cç]a passe pas|[cç]a marche pas)",
         r"(attention|vigilance|risque|incident|panne|d[eé]faut)",
+    ],
+    "option": [
+        r"(option|alternative|soit .+ soit|ou bien|[aà] voir)",
+        r"(proposition|on envisage|[eé]ventuellement)",
     ],
     "rappel": [
         r"(rappel|[aà] faire|penser [aà]|ne pas oublier|il faut|faut que)",
@@ -69,6 +85,8 @@ INTENT_EMOJI = {
 
 TAG_EMOJI = {
     "decision": "\U0001f4cc",   # 📌
+    "doute": "\u2753",          # ❓
+    "lecon": "\U0001f4a1",      # 💡
     "option": "\U0001f504",     # 🔄
     "probleme": "\u26a0\ufe0f", # ⚠️
     "rappel": "\u23f0",         # ⏰
@@ -77,6 +95,8 @@ TAG_EMOJI = {
 
 TAG_LABEL = {
     "decision": "D\u00e9cision m\u00e9moris\u00e9e",
+    "doute": "Doute enregistr\u00e9",
+    "lecon": "Le\u00e7on retenue",
     "option": "Option not\u00e9e",
     "probleme": "Probl\u00e8me not\u00e9",
     "rappel": "Rappel not\u00e9",
@@ -104,7 +124,8 @@ def detect_intent(text: str) -> str:
 def detect_business_tag(text: str) -> str | None:
     """Detecte la categorie metier.
 
-    Retourne: decision | option | probleme | rappel | constat | None.
+    Retourne: decision | lecon | doute | probleme | option | rappel | constat | None.
+    L'ordre de detection suit la precedence definie dans BUSINESS_TAGS.
     """
     text_lower = text.lower()
 

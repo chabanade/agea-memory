@@ -186,5 +186,37 @@ async def get_history(last_n: int = 10) -> str:
         return f"{len(lines)} messages recents:\n" + "\n".join(lines)
 
 
+@mcp.tool()
+async def search_decisions(query: str, limit: int = 5) -> str:
+    """Cherche des decisions structurees dans la memoire AGEA.
+
+    Cible specifiquement les decisions (choix, justification, alternatives)
+    enregistrees via /decision ou detectees automatiquement.
+
+    Args:
+        query: Le sujet de la decision a chercher (ex: "Huawei CNVL")
+        limit: Nombre max de resultats (defaut: 5)
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{AGEA_URL}/api/facts",
+            params={"q": f"D\u00c9CISION {query}", "limit": limit},
+            headers=_headers(),
+        )
+        if resp.status_code != 200:
+            return f"Erreur API: {resp.status_code} - {resp.text}"
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return f"Aucune d\u00e9cision trouv\u00e9e pour '{query}'"
+        lines = []
+        for r in results:
+            fact = r.get("fact", "")
+            name = r.get("name", "")
+            prefix = f"[{name}] " if name else ""
+            lines.append(f"{prefix}{fact}")
+        return f"{len(lines)} d\u00e9cision(s) pour '{query}':\n" + "\n".join(lines)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

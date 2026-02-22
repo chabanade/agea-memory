@@ -24,6 +24,7 @@ from voice_handler import VoiceHandler
 from intent_detector import detect_intent, detect_business_tag, format_response, tag_content
 from daily_summary import DailySummary
 from proactive import ProactiveAgent
+from reasoning_formatter import format_reasoning, format_reasoning_response
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -31,6 +32,7 @@ TELEGRAM_ALLOWED_USERS = os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
 AGEA_API_TOKEN = os.getenv("ZEP_SECRET_KEY", os.getenv("AGEA_API_TOKEN", ""))
 TELEGRAM_MODE = os.getenv("TELEGRAM_MODE", "polling")  # "polling" ou "webhook"
 MEHDI_CHAT_ID = os.getenv("MEHDI_CHAT_ID", "")  # Chat ID Telegram de Mehdi (Phase 6D/6E)
+FEATURE_REASONING = os.getenv("FEATURE_REASONING", "true").lower() == "true"  # Phase 7
 
 # --- Logging ---
 logging.basicConfig(
@@ -56,6 +58,20 @@ async def lifespan(app: FastAPI):
     # Initialiser le store de conversations (PostgreSQL)
     await conversations.initialize()
     logger.info("ConversationStore: PostgreSQL")
+
+    # Phase 7 : ajouter colonne review_payload si absente
+    try:
+        import asyncpg
+        _conn = await asyncpg.connect(os.getenv(
+            "POSTGRES_DSN", "postgresql://agea:password@postgres:5432/agea_memory"
+        ))
+        await _conn.execute(
+            "ALTER TABLE graphiti_tasks ADD COLUMN IF NOT EXISTS review_payload JSONB"
+        )
+        await _conn.close()
+        logger.info("Phase 7: colonne review_payload OK")
+    except Exception as _e:
+        logger.warning("Phase 7: ALTER TABLE review_payload: %s", _e)
 
     # Initialiser Graphiti (non-bloquant si desactive ou echec)
     graphiti_ok = await graphiti.initialize()
@@ -480,6 +496,11 @@ async def handle_command(chat_id: str, text: str):
         "/forget": cmd_forget,
         "/entity": cmd_entity,
         "/queue": cmd_queue,
+        # Phase 7 : Raisonnement structure
+        "/decision": cmd_decision,
+        "/doute": cmd_doute,
+        "/lecon": cmd_lecon,
+        "/review": cmd_review,
     }
 
     handler = handlers.get(command)
@@ -504,9 +525,12 @@ async def handle_message(chat_id: str, text: str):
         await route_memo(chat_id, text, intent="memo")
 
 
-async def route_memo(chat_id: str, text: str, intent: str = "memo", vocal: bool = False):
-    """Route un memo/correction/forget avec tags metier (Phase 6B)."""
-    tag = detect_business_tag(text)
+async def route_memo(
+    chat_id: str, text: str, intent: str = "memo",
+    vocal: bool = False, forced_tag: str | None = None,
+):
+    """Route un memo/correction/forget avec tags metier (Phase 6B + Phase 7 raisonnement)."""
+    tag = forced_tag or detect_business_tag(text)
     tagged = tag_content(text, tag)
 
     try:
@@ -526,6 +550,48 @@ async def route_memo(chat_id: str, text: str, intent: str = "memo", vocal: bool 
                     source_description=f"telegram-{'vocal' if vocal else 'texte'}-forget",
                 )
             await conversations.add_memory(f"[FORGET] {tagged}", role="user")
+
+        # --- Phase 7 : Raisonnement structure ---
+        elif FEATURE_REASONING and tag in ("decision", "doute", "lecon"):
+            forced = forced_tag is not None
+            enriched_text, pydantic_data, score = await format_reasoning(
+                text, tag, llm, forced=forced,
+            )
+            threshold = float(os.getenv("REVIEW_THRESHOLD", "0.80"))
+
+            if score >= threshold:
+                await conversations.add_memory(enriched_text, role="user")
+                if graphiti.available:
+                    await enqueue_graphiti_task(
+                        content=enriched_text,
+                        task_type="add_episode",
+                        source_description=f"raisonnement-{tag}-{'vocal' if vocal else 'texte'}",
+                    )
+                response = format_reasoning_response(tag, pydantic_data, score, vocal=vocal)
+            else:
+                # Review queue : score insuffisant
+                await conversations.add_memory(tagged, role="user")
+                if graphiti.available:
+                    await enqueue_graphiti_task(
+                        content=enriched_text,
+                        task_type="add_episode",
+                        source_description=f"raisonnement-{tag}-review",
+                        status="review",
+                        review_payload={
+                            "raw_text": text,
+                            "score": score,
+                            "tag": tag,
+                            "extraction": pydantic_data,
+                        },
+                    )
+                response = (
+                    f"\u26a0\ufe0f Score {score:.0%} \u2014 extraction incompl\u00e8te.\n"
+                    f"Utilise /review pour valider ou reformule avec plus de d\u00e9tails."
+                )
+
+            await send_telegram(chat_id, response)
+            return
+
         else:
             await conversations.add_memory(tagged, role="user")
             if graphiti.available:
@@ -886,6 +952,135 @@ async def cmd_queue(chat_id: str, args: str):
             )
     except Exception as e:
         logger.error("Erreur /queue: %s", e)
+        await send_telegram(chat_id, f"Erreur: {e}")
+
+
+# --- Phase 7 : Commandes raisonnement ---
+
+async def cmd_decision(chat_id: str, args: str):
+    """Commande /decision - Enregistrer une decision structuree."""
+    if not FEATURE_REASONING:
+        await send_telegram(chat_id, "Raisonnement d\u00e9sactiv\u00e9 (FEATURE_REASONING=false).")
+        return
+    if not args:
+        await send_telegram(
+            chat_id,
+            "Usage: /decision &lt;ce qui a \u00e9t\u00e9 d\u00e9cid\u00e9&gt;\n"
+            "Ex: /decision On part sur Huawei pour CNVL car meilleur prix",
+        )
+        return
+    await route_memo(chat_id, args, intent="memo", forced_tag="decision")
+
+
+async def cmd_doute(chat_id: str, args: str):
+    """Commande /doute - Enregistrer une hesitation ou question ouverte."""
+    if not FEATURE_REASONING:
+        await send_telegram(chat_id, "Raisonnement d\u00e9sactiv\u00e9 (FEATURE_REASONING=false).")
+        return
+    if not args:
+        await send_telegram(
+            chat_id,
+            "Usage: /doute &lt;question ou h\u00e9sitation&gt;\n"
+            "Ex: /doute Est-ce qu'on prend K2 ou Schletter pour les fixations ?",
+        )
+        return
+    await route_memo(chat_id, args, intent="memo", forced_tag="doute")
+
+
+async def cmd_lecon(chat_id: str, args: str):
+    """Commande /lecon - Enregistrer une lecon apprise."""
+    if not FEATURE_REASONING:
+        await send_telegram(chat_id, "Raisonnement d\u00e9sactiv\u00e9 (FEATURE_REASONING=false).")
+        return
+    if not args:
+        await send_telegram(
+            chat_id,
+            "Usage: /lecon &lt;erreur et correction&gt;\n"
+            "Ex: /lecon Ne jamais faire confiance aux donn\u00e9es web sans v\u00e9rification",
+        )
+        return
+    await route_memo(chat_id, args, intent="memo", forced_tag="lecon")
+
+
+async def cmd_review(chat_id: str, args: str):
+    """Commande /review - Gerer la review queue du raisonnement."""
+    if not FEATURE_REASONING:
+        await send_telegram(chat_id, "Raisonnement d\u00e9sactiv\u00e9 (FEATURE_REASONING=false).")
+        return
+
+    try:
+        import asyncpg
+        import json as _json
+        dsn = os.getenv("POSTGRES_DSN", "postgresql://agea:password@postgres:5432/agea_memory")
+        conn = await asyncpg.connect(dsn)
+        try:
+            parts = args.split() if args else []
+
+            if not parts:
+                # Lister les taches en review
+                rows = await conn.fetch(
+                    """
+                    SELECT id, LEFT(content, 80) as content, review_payload, created_at
+                    FROM graphiti_tasks
+                    WHERE status = 'review'
+                    ORDER BY created_at DESC
+                    LIMIT 10
+                    """
+                )
+                if not rows:
+                    await send_telegram(chat_id, "\u2705 Aucune t\u00e2che en review.")
+                    return
+
+                lines = [f"\u23f3 {len(rows)} t\u00e2che(s) en review :\n"]
+                for r in rows:
+                    payload = _json.loads(r["review_payload"]) if r["review_payload"] else {}
+                    score = payload.get("score", "?")
+                    tag = payload.get("tag", "?")
+                    lines.append(
+                        f"  #{r['id']} [{tag}] score={score} \u2014 {r['content'][:60]}"
+                    )
+                lines.append("\nUsage: /review &lt;id&gt; approve|reject")
+                await send_telegram(chat_id, "\n".join(lines))
+
+            elif len(parts) >= 2:
+                task_id = int(parts[0])
+                action = parts[1].lower()
+
+                if action == "approve":
+                    await conn.execute(
+                        """
+                        UPDATE graphiti_tasks
+                        SET status = 'pending', review_payload = NULL, attempts = 0
+                        WHERE id = $1 AND status = 'review'
+                        """,
+                        task_id,
+                    )
+                    await send_telegram(
+                        chat_id,
+                        f"\u2705 T\u00e2che #{task_id} approuv\u00e9e \u2014 en attente de traitement.",
+                    )
+                elif action == "reject":
+                    reason = " ".join(parts[2:]) if len(parts) > 2 else "Rejet\u00e9 par l'utilisateur"
+                    await conn.execute(
+                        """
+                        UPDATE graphiti_tasks
+                        SET status = 'failed', error_message = $2
+                        WHERE id = $1 AND status = 'review'
+                        """,
+                        task_id, reason,
+                    )
+                    await send_telegram(
+                        chat_id,
+                        f"\u274c T\u00e2che #{task_id} rejet\u00e9e : {reason}",
+                    )
+                else:
+                    await send_telegram(chat_id, "Action inconnue. Utilise: approve ou reject")
+            else:
+                await send_telegram(chat_id, "Usage: /review [id approve|reject]")
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("Erreur /review: %s", e)
         await send_telegram(chat_id, f"Erreur: {e}")
 
 

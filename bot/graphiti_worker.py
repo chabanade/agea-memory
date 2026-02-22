@@ -246,28 +246,47 @@ async def enqueue_graphiti_task(
     task_type: str = "add_episode",
     source_description: str = "telegram",
     message_uuid: str = None,
+    status: str = None,
+    review_payload: dict = None,
 ) -> bool:
     """
     Ajoute une tache dans la queue PostgreSQL.
-    Appele par main.py lors de /memo, /correct, /forget.
+    Appele par main.py lors de /memo, /correct, /forget, /decision, /doute, /lecon.
     Rapide : simple INSERT SQL.
+
+    Phase 7 : status='review' + review_payload JSONB pour la review queue.
     """
     if not message_uuid:
         message_uuid = str(uuid.uuid4())
 
     try:
         import asyncpg
+        import json as _json
         conn = await asyncpg.connect(POSTGRES_DSN)
         try:
-            await conn.execute(
-                """
-                INSERT INTO graphiti_tasks (message_uuid, content, source_description, task_type)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (message_uuid) DO NOTHING
-                """,
-                message_uuid, content, source_description, task_type,
-            )
-            logger.info("Tache enqueue: %s (%s)", task_type, content[:50])
+            if status or review_payload:
+                # Phase 7 : insertion avec status et/ou review_payload
+                await conn.execute(
+                    """
+                    INSERT INTO graphiti_tasks
+                        (message_uuid, content, source_description, task_type, status, review_payload)
+                    VALUES ($1, $2, $3, $4, COALESCE($5, 'pending'), $6::jsonb)
+                    ON CONFLICT (message_uuid) DO NOTHING
+                    """,
+                    message_uuid, content, source_description, task_type,
+                    status,
+                    _json.dumps(review_payload) if review_payload else None,
+                )
+            else:
+                await conn.execute(
+                    """
+                    INSERT INTO graphiti_tasks (message_uuid, content, source_description, task_type)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (message_uuid) DO NOTHING
+                    """,
+                    message_uuid, content, source_description, task_type,
+                )
+            logger.info("Tache enqueue: %s (%s) [status=%s]", task_type, content[:50], status or "pending")
             return True
         finally:
             await conn.close()
