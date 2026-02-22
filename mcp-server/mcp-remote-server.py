@@ -105,8 +105,10 @@ async def save_memory(content: str, role: str = "assistant") -> str:
 
 @mcp.tool()
 async def search_facts(query: str, limit: int = 5) -> str:
-    """Cherche des faits structures dans le knowledge graph AGEA/Graphiti.
-    Plus precis que search_memory pour les donnees verifiees (entites, relations).
+    """SOURCE DE VERITE pour toute question factuelle (chiffres, specs,
+    noms, couleurs, decisions, projets). Donnees verifiees et corrigees.
+    TOUJOURS utiliser EN PREMIER pour les questions factuelles.
+    Utiliser search_memory uniquement si search_facts ne retourne rien.
 
     Args:
         query: La question ou le sujet a rechercher
