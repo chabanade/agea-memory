@@ -167,7 +167,7 @@ async def status():
     """Statut detaille du systeme."""
     return {
         "service": "agea",
-        "version": "3.0.0",
+        "version": "4.0.0",
         "llm_provider": llm.current_provider,
         "store": "postgresql",
         "telegram_configured": bool(TELEGRAM_BOT_TOKEN),
