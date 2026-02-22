@@ -242,6 +242,39 @@ async def api_get_context(
     return {"query": q, "results": results, "count": len(results)}
 
 
+CONTRADICTION_THRESHOLD = float(os.getenv("CONTRADICTION_THRESHOLD", "0.85"))
+
+
+async def _detect_contradiction(existing_fact: str, new_text: str) -> str:
+    """Detecte si un nouveau texte contredit un fait existant via LLM.
+    Retourne: 'contradiction', 'doublon', ou 'nouveau'.
+    """
+    prompt = (
+        "Compare ces deux informations :\n"
+        f"EXISTANT : {existing_fact}\n"
+        f"NOUVEAU : {new_text}\n\n"
+        "Reponds UNIQUEMENT par un seul mot :\n"
+        "- CONTRADICTION si le NOUVEAU modifie ou contredit une valeur de l'EXISTANT\n"
+        "- DOUBLON si le NOUVEAU dit la meme chose que l'EXISTANT\n"
+        "- NOUVEAU si ce sont des sujets differents ou des complements"
+    )
+    try:
+        response = await llm.chat(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=20,
+        )
+        answer = response.strip().upper()
+        if "CONTRADICTION" in answer:
+            return "contradiction"
+        if "DOUBLON" in answer:
+            return "doublon"
+        return "nouveau"
+    except Exception as e:
+        logger.warning("Erreur detection contradiction: %s", e)
+        return "nouveau"  # Fallback safe : on ecrit
+
+
 @app.post("/api/memo", tags=["bridge"], operation_id="saveMemo",
           summary="Sauvegarder une information dans la memoire")
 async def api_post_memo(
@@ -249,21 +282,68 @@ async def api_post_memo(
     authorization: str = Header(default=""),
 ):
     """Sauvegarde une information dans la memoire AGEA.
-    Appeler cette route APRES chaque echange important pour persister
-    les decisions, informations client, ou connaissances acquises."""
+    Detecte automatiquement les contradictions avec les faits existants
+    et route vers correct_fact si necessaire."""
     await verify_bearer(authorization)
+
+    # Detection de contradiction (si Graphiti lecture active)
+    action = "save"
+    matched_fact = None
+    if graphiti.read_enabled:
+        try:
+            existing = await graphiti.search(req.content, num_results=3)
+            if existing:
+                top = existing[0]
+                # Score seuil : si Graphiti retourne un fait tres similaire
+                # (Graphiti ne retourne pas de score numerique, on utilise le LLM)
+                verdict = await _detect_contradiction(top["fact"], req.content)
+                if verdict == "contradiction":
+                    action = "correct"
+                    matched_fact = top["fact"]
+                    logger.info("Contradiction detectee: '%s' vs '%s'", req.content[:60], top["fact"][:60])
+                elif verdict == "doublon":
+                    action = "skip"
+                    matched_fact = top["fact"]
+                    logger.info("Doublon detecte: '%s'", req.content[:60])
+        except Exception as e:
+            logger.warning("Erreur detection contradiction (fallback save): %s", e)
+
+    if action == "skip":
+        return {
+            "ok": True,
+            "queued": False,
+            "status": "duplicate",
+            "message": "Information deja en memoire",
+            "existing_fact": matched_fact[:100] if matched_fact else "",
+            "content": req.content[:100],
+        }
+
+    # Sauvegarder dans la conversation (Zep)
     ok = await conversations.add_memory(req.content, role=req.role, session_id=req.session_id)
 
-    # Queue Graphiti async (si active)
+    # Queue Graphiti async
     queued = False
     if graphiti.available:
-        queued = await enqueue_graphiti_task(
-            content=req.content,
-            task_type="add_episode",
-            source_description=f"api ({req.role})",
-        )
+        if action == "correct":
+            queued = await enqueue_graphiti_task(
+                content=req.content,
+                task_type="correct",
+                source_description=f"api-auto-correct ({req.role})",
+            )
+        else:
+            queued = await enqueue_graphiti_task(
+                content=req.content,
+                task_type="add_episode",
+                source_description=f"api ({req.role})",
+            )
 
-    return {"ok": ok, "queued": queued, "content": req.content[:100]}
+    return {
+        "ok": ok,
+        "queued": queued,
+        "status": "corrected" if action == "correct" else "saved",
+        "corrected_fact": matched_fact[:100] if action == "correct" and matched_fact else None,
+        "content": req.content[:100],
+    }
 
 
 @app.get("/api/session/{session_id}/history", tags=["bridge"], operation_id="getHistory",

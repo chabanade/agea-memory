@@ -263,19 +263,28 @@ class GraphitiClient:
         """
         Recherche hybride dans le knowledge graph.
         0 appels LLM (seulement 1 embedding) = sub-second.
+        Filtre automatiquement les faits invalides (invalid_at non null).
         """
         if not self._available:
             return []
 
         try:
+            # Demander plus de resultats pour compenser le filtrage
+            fetch_count = num_results + 5
             results = await self._graphiti.search(
                 query=query,
-                num_results=num_results,
+                num_results=fetch_count,
                 group_ids=[group_id],
             )
 
             facts = []
+            skipped = 0
             for edge in results:
+                # Filtrer les faits invalides (corriges/remplaces)
+                if edge.invalid_at is not None:
+                    skipped += 1
+                    continue
+
                 facts.append({
                     "uuid": edge.uuid,
                     "fact": edge.fact,
@@ -283,12 +292,18 @@ class GraphitiClient:
                     "source_node_uuid": edge.source_node_uuid,
                     "target_node_uuid": edge.target_node_uuid,
                     "valid_at": edge.valid_at.isoformat() if edge.valid_at else None,
-                    "invalid_at": edge.invalid_at.isoformat() if edge.invalid_at else None,
+                    "invalid_at": None,
                     "created_at": edge.created_at.isoformat() if edge.created_at else None,
                     "episodes": edge.episodes if hasattr(edge, "episodes") else [],
                 })
 
-            logger.info("Recherche Graphiti '%s': %d faits", query[:30], len(facts))
+            # Tronquer au nombre demande
+            facts = facts[:num_results]
+
+            if skipped:
+                logger.info("Recherche Graphiti '%s': %d faits (%d invalides filtres)", query[:30], len(facts), skipped)
+            else:
+                logger.info("Recherche Graphiti '%s': %d faits", query[:30], len(facts))
             return facts
 
         except Exception as e:
@@ -304,6 +319,7 @@ class GraphitiClient:
     ) -> Optional[dict]:
         """
         Recupere les faits lies a une entite specifique.
+        Filtre les faits invalides (invalid_at non null).
         """
         if not self._available:
             return None
@@ -311,24 +327,27 @@ class GraphitiClient:
         try:
             results = await self._graphiti.search(
                 query=entity_name,
-                num_results=15,
+                num_results=20,
                 group_ids=[group_id],
             )
 
             if not results:
                 return None
 
-            # Filtrer les faits mentionnant cette entite dans le fact text
+            # Filtrer les faits mentionnant cette entite + faits valides uniquement
             related_facts = []
             name_lower = entity_name.lower()
             for edge in results:
+                # Exclure les faits invalides (corriges/remplaces)
+                if edge.invalid_at is not None:
+                    continue
                 fact_lower = (edge.fact or "").lower()
                 if name_lower in fact_lower:
                     related_facts.append({
                         "fact": edge.fact,
                         "name": edge.name,
                         "valid_at": edge.valid_at.isoformat() if edge.valid_at else None,
-                        "invalid_at": edge.invalid_at.isoformat() if edge.invalid_at else None,
+                        "invalid_at": None,
                     })
 
             return {

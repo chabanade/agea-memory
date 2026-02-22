@@ -65,7 +65,10 @@ async def search_memory(query: str, limit: int = 5) -> str:
 
 @mcp.tool()
 async def save_memory(content: str, role: str = "assistant") -> str:
-    """Sauvegarde une information dans la memoire AGEA.
+    """Enregistre une NOUVELLE information dans la memoire AGEA.
+
+    UTILISER pour : nouveaux faits, nouvelles decisions, nouvelles observations.
+    NE PAS UTILISER pour corriger un fait existant → utiliser correct_fact.
 
     Args:
         content: L'information a sauvegarder
@@ -140,8 +143,11 @@ async def get_entity(name: str) -> str:
 
 @mcp.tool()
 async def correct_fact(correction: str) -> str:
-    """Corrige un fait dans la memoire avec bi-temporalite.
-    L'ancien fait est invalide et le nouveau est enregistre.
+    """Corrige un fait EXISTANT dans la memoire (correction bi-temporelle).
+    L'ancien fait reste dans l'historique mais est marque comme remplace.
+
+    UTILISER quand l'information remplace ou contredit un fait deja en memoire.
+    Exemples : "Les lests font 5 kg, pas 3 kg", "C'est tuile canal, pas romaine"
 
     Args:
         correction: Description de la correction
