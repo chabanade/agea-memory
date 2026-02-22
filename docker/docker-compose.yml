@@ -98,12 +98,34 @@ services:
     networks:
       - agea
 
+  # --- MCP Remote Server (Streamable HTTP pour Claude.ai) ---
+  mcp-remote:
+    build:
+      context: ../mcp-server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      bot:
+        condition: service_healthy
+    environment:
+      AGEA_API_URL: http://bot:8000
+      AGEA_API_TOKEN: ${ZEP_SECRET_KEY}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/mcp')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - agea
+
   # --- Caddy (Reverse Proxy + HTTPS auto) ---
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
       - bot
+      - mcp-remote
     environment:
       BOT_DOMAIN: ${BOT_DOMAIN:-srv987452.hstgr.cloud}
     ports:
