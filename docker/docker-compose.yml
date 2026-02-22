@@ -111,7 +111,7 @@ services:
       AGEA_API_URL: http://bot:8000
       AGEA_API_TOKEN: ${ZEP_SECRET_KEY}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/mcp')"]
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8888),2); s.close()"]
       interval: 30s
       timeout: 10s
       retries: 3

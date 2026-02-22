@@ -24,6 +24,8 @@ AGEA_API_TOKEN = os.getenv("AGEA_API_TOKEN", "")
 
 mcp = FastMCP(
     "AGEA Memory",
+    host="0.0.0.0",
+    port=8888,
     stateless_http=True,
     json_response=True,
     instructions=(
@@ -227,4 +229,4 @@ async def search_decisions(query: str, limit: int = 5) -> str:
 
 if __name__ == "__main__":
     logger.info("Demarrage MCP Remote Server AGEA sur port 8888")
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8888)
+    mcp.run(transport="streamable-http")
