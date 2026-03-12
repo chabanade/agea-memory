@@ -82,10 +82,12 @@ async def lifespan(app: FastAPI):
 
     # Lancer le worker Graphiti en tache de fond
     worker_task = None
-    if graphiti_ok:
+    if graphiti.enabled:
         graphiti_worker = GraphitiWorker(graphiti)
         worker_task = asyncio.create_task(graphiti_worker.run())
         logger.info("Worker Graphiti lance en arriere-plan")
+    else:
+        logger.info("Worker Graphiti non lance (GRAPHITI_ENABLED=false)")
 
     # Lancer les crons Phase 6D/6E (resume quotidien + relances proactives)
     summary_task = None
@@ -323,7 +325,7 @@ async def api_post_memo(
 
     # Queue Graphiti async
     queued = False
-    if graphiti.available:
+    if graphiti.enabled:
         if action == "correct":
             queued = await enqueue_graphiti_task(
                 content=req.content,
@@ -399,8 +401,8 @@ async def api_post_correct(
     Le worker Graphiti traitera la correction en arriere-plan."""
     await verify_bearer(authorization)
 
-    if not graphiti.available:
-        raise HTTPException(status_code=503, detail="Graphiti non disponible")
+    if not graphiti.enabled:
+        raise HTTPException(status_code=503, detail="Graphiti desactive")
 
     queued = await enqueue_graphiti_task(
         content=req.content,
@@ -472,8 +474,8 @@ async def api_admin_reindex(
     Idempotent grace a message_uuid UNIQUE + ON CONFLICT DO NOTHING."""
     await verify_bearer(authorization)
 
-    if not graphiti.available:
-        raise HTTPException(status_code=503, detail="Graphiti non disponible")
+    if not graphiti.enabled:
+        raise HTTPException(status_code=503, detail="Graphiti desactive")
 
     memory = await conversations.get_memory(session_id="mehdi-agea", last_n=last_n)
     messages = memory.get("messages", []) if memory else []
@@ -615,7 +617,7 @@ async def route_memo(
 
     try:
         if intent == "correction":
-            if graphiti.available:
+            if graphiti.enabled:
                 await enqueue_graphiti_task(
                     content=text,
                     task_type="correct",
@@ -623,7 +625,7 @@ async def route_memo(
                 )
             await conversations.add_memory(f"[CORRECTION] {tagged}", role="user")
         elif intent == "forget":
-            if graphiti.available:
+            if graphiti.enabled:
                 await enqueue_graphiti_task(
                     content=text,
                     task_type="forget",
@@ -641,7 +643,7 @@ async def route_memo(
 
             if score >= threshold:
                 await conversations.add_memory(enriched_text, role="user")
-                if graphiti.available:
+                if graphiti.enabled:
                     await enqueue_graphiti_task(
                         content=enriched_text,
                         task_type="add_episode",
@@ -651,7 +653,7 @@ async def route_memo(
             else:
                 # Review queue : score insuffisant
                 await conversations.add_memory(tagged, role="user")
-                if graphiti.available:
+                if graphiti.enabled:
                     await enqueue_graphiti_task(
                         content=enriched_text,
                         task_type="add_episode",
@@ -674,7 +676,7 @@ async def route_memo(
 
         else:
             await conversations.add_memory(tagged, role="user")
-            if graphiti.available:
+            if graphiti.enabled:
                 await enqueue_graphiti_task(
                     content=tagged,
                     task_type="add_episode",
@@ -740,7 +742,7 @@ async def handle_voice(chat_id: str, voice_data: dict):
             return
 
         if intent == "correction":
-            if graphiti.available:
+            if graphiti.enabled:
                 await enqueue_graphiti_task(
                     content=text,
                     task_type="correct",
@@ -748,7 +750,7 @@ async def handle_voice(chat_id: str, voice_data: dict):
                 )
             await conversations.add_memory(f"[CORRECTION] {tagged}", role="user")
         elif intent == "forget":
-            if graphiti.available:
+            if graphiti.enabled:
                 await enqueue_graphiti_task(
                     content=text,
                     task_type="forget",
@@ -757,7 +759,7 @@ async def handle_voice(chat_id: str, voice_data: dict):
             await conversations.add_memory(f"[FORGET] {tagged}", role="user")
         else:
             await conversations.add_memory(f"[VOCAL] {tagged}", role="user")
-            if graphiti.available:
+            if graphiti.enabled:
                 await enqueue_graphiti_task(
                     content=tagged,
                     task_type="add_episode",
@@ -893,7 +895,7 @@ async def cmd_memo(chat_id: str, args: str):
 
         # 2. Queue Graphiti async (si active)
         queued = False
-        if graphiti.available:
+        if graphiti.enabled:
             queued = await enqueue_graphiti_task(
                 content=args,
                 task_type="add_episode",
@@ -939,8 +941,8 @@ async def cmd_correct(chat_id: str, args: str):
         await send_telegram(chat_id, "Usage: /correct &lt;fait corrige&gt;")
         return
 
-    if not graphiti.available:
-        await send_telegram(chat_id, "Graphiti non disponible.")
+    if not graphiti.enabled:
+        await send_telegram(chat_id, "Graphiti desactive.")
         return
 
     try:
@@ -964,8 +966,8 @@ async def cmd_forget(chat_id: str, args: str):
         await send_telegram(chat_id, "Usage: /forget &lt;fait a oublier&gt;")
         return
 
-    if not graphiti.available:
-        await send_telegram(chat_id, "Graphiti non disponible.")
+    if not graphiti.enabled:
+        await send_telegram(chat_id, "Graphiti desactive.")
         return
 
     try:

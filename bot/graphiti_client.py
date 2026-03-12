@@ -118,11 +118,17 @@ class GraphitiClient:
         self._graphiti = None
         self._initialized = False
         self._available = False
+        self._last_reconnect_attempt: Optional[datetime] = None
+
+    @property
+    def enabled(self) -> bool:
+        """True si la fonctionnalite Graphiti est activee via env."""
+        return GRAPHITI_ENABLED
 
     @property
     def available(self) -> bool:
         """True si Graphiti est operationnel ET active."""
-        return self._available and GRAPHITI_ENABLED
+        return self._available and self.enabled
 
     @property
     def read_enabled(self) -> bool:
@@ -186,6 +192,7 @@ class GraphitiClient:
 
             self._initialized = True
             self._available = True
+            self._last_reconnect_attempt = None
             logger.info(
                 "Graphiti initialise - Neo4j: %s, LLM: DeepSeek, Semaphore: %d",
                 NEO4J_URI, SEMAPHORE_LIMIT,
@@ -194,6 +201,7 @@ class GraphitiClient:
 
         except Exception as e:
             logger.error("Echec initialisation Graphiti: %s", e)
+            self._initialized = False
             self._available = False
             return False
 
@@ -265,6 +273,9 @@ class GraphitiClient:
         0 appels LLM (seulement 1 embedding) = sub-second.
         Filtre automatiquement les faits invalides (invalid_at non null).
         """
+        if not self._available and self.enabled:
+            await self.health_check()
+
         if not self._available:
             return []
 
@@ -321,6 +332,9 @@ class GraphitiClient:
         Recupere les faits lies a une entite specifique.
         Filtre les faits invalides (invalid_at non null).
         """
+        if not self._available and self.enabled:
+            await self.health_check()
+
         if not self._available:
             return None
 
@@ -358,6 +372,8 @@ class GraphitiClient:
 
         except Exception as e:
             logger.error("Erreur get_entity: %s", e)
+            if self._is_connection_error(e):
+                self._available = False
             return None
 
     # === MAINTENANCE ===
@@ -377,13 +393,18 @@ class GraphitiClient:
 
     async def health_check(self) -> dict:
         """Verifie la sante et tente reconnexion si necessaire."""
-        if not GRAPHITI_ENABLED:
+        if not self.enabled:
             return {"status": "disabled", "available": False}
 
-        if not self._initialized:
-            return {"status": "not_initialized", "available": False}
-
         if not self._available:
+            now = datetime.utcnow()
+            if (
+                self._last_reconnect_attempt is not None
+                and (now - self._last_reconnect_attempt).total_seconds() < 10
+            ):
+                return {"status": "reconnect_backoff", "available": False}
+
+            self._last_reconnect_attempt = now
             logger.info("Tentative reconnexion Graphiti...")
             ok = await self.initialize()
             return {"status": "reconnected" if ok else "unavailable", "available": ok}

@@ -58,11 +58,25 @@ class GraphitiWorker:
 
         # Attendre que Graphiti soit pret
         while self._running and not self.graphiti.available:
-            logger.info("Worker: attente initialisation Graphiti...")
+            status = await self.graphiti.health_check()
+            logger.info(
+                "Worker: Graphiti indisponible (%s), nouvelle tentative dans 10s",
+                status.get("status", "unknown"),
+            )
             await asyncio.sleep(10)
 
         while self._running:
             try:
+                if not self.graphiti.available:
+                    status = await self.graphiti.health_check()
+                    if not self.graphiti.available:
+                        logger.info(
+                            "Worker: Graphiti indisponible (%s), pause 10s",
+                            status.get("status", "unknown"),
+                        )
+                        await asyncio.sleep(10)
+                        continue
+
                 tasks = await self._fetch_pending(batch_size=3)
                 if not tasks:
                     await asyncio.sleep(10)
