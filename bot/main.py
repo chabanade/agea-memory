@@ -495,6 +495,100 @@ async def api_admin_reindex(
     return {"ok": True, "messages_found": len(messages), "enqueued": enqueued}
 
 
+@app.get("/api/admin/failed", tags=["admin"], operation_id="adminFailed",
+         summary="Liste les taches Graphiti en echec")
+async def api_admin_failed(
+    limit: int = 20,
+    authorization: str = Header(default=""),
+):
+    """Retourne les dernieres taches en echec avec erreurs (debug prod)."""
+    await verify_bearer(authorization)
+
+    limit = max(1, min(limit, 200))
+    import asyncpg
+    conn = await asyncpg.connect(os.getenv(
+        "POSTGRES_DSN", "postgresql://agea:password@postgres:5432/agea_memory"
+    ))
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT id, task_type, attempts, max_attempts,
+                   LEFT(content, 180) AS content_preview,
+                   LEFT(COALESCE(error_message, ''), 240) AS error_preview,
+                   created_at, processed_at
+            FROM graphiti_tasks
+            WHERE status = 'failed'
+            ORDER BY processed_at DESC NULLS LAST, id DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        items = []
+        for r in rows:
+            items.append({
+                "id": r["id"],
+                "task_type": r["task_type"],
+                "attempts": r["attempts"],
+                "max_attempts": r["max_attempts"],
+                "content_preview": r["content_preview"],
+                "error_preview": r["error_preview"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "processed_at": r["processed_at"].isoformat() if r["processed_at"] else None,
+            })
+        return {"count": len(items), "items": items}
+    finally:
+        await conn.close()
+
+
+@app.post("/api/admin/requeue-failed", tags=["admin"], operation_id="adminRequeueFailed",
+          summary="Remet les taches failed en pending")
+async def api_admin_requeue_failed(
+    limit: int = 100,
+    authorization: str = Header(default=""),
+):
+    """Relance des taches failed apres correction d'incident."""
+    await verify_bearer(authorization)
+
+    if not graphiti.enabled:
+        raise HTTPException(status_code=503, detail="Graphiti desactive")
+
+    limit = max(1, min(limit, 1000))
+    import asyncpg
+    conn = await asyncpg.connect(os.getenv(
+        "POSTGRES_DSN", "postgresql://agea:password@postgres:5432/agea_memory"
+    ))
+    try:
+        rows = await conn.fetch(
+            """
+            WITH picked AS (
+                SELECT id
+                FROM graphiti_tasks
+                WHERE status = 'failed'
+                ORDER BY processed_at NULLS LAST, created_at
+                LIMIT $1
+            )
+            UPDATE graphiti_tasks t
+            SET status = 'pending',
+                attempts = 0,
+                error_message = NULL,
+                next_retry_at = CURRENT_TIMESTAMP,
+                processed_at = NULL
+            FROM picked
+            WHERE t.id = picked.id
+            RETURNING t.id
+            """,
+            limit,
+        )
+        requeued_ids = [r["id"] for r in rows]
+        return {
+            "ok": True,
+            "requeued": len(requeued_ids),
+            "sample_ids": requeued_ids[:20],
+        }
+    finally:
+        await conn.close()
+
+
 # --- Telegram Polling ---
 
 async def telegram_polling_loop():
@@ -578,6 +672,7 @@ async def handle_command(chat_id: str, text: str):
         "/forget": cmd_forget,
         "/entity": cmd_entity,
         "/queue": cmd_queue,
+        "/queuefix": cmd_queuefix,
         # Phase 7 : Raisonnement structure
         "/decision": cmd_decision,
         "/doute": cmd_doute,
@@ -790,7 +885,7 @@ async def cmd_start(chat_id: str, args: str):
         "\U0001f5d1\ufe0f \"Oublie...\" \u2192 suppression\n"
         "\U0001f3a4 Envoyez un vocal \u2192 transcrit + route\n\n"
         "Commandes rapides :\n"
-        "/memo /ask /correct /forget /entity /projet /queue /status\n\n"
+        "/memo /ask /correct /forget /entity /projet /queue /queuefix /status\n\n"
         f"Vocal: {voice_status}",
     )
 
@@ -1035,6 +1130,67 @@ async def cmd_queue(chat_id: str, args: str):
     except Exception as e:
         logger.error("Erreur /queue: %s", e)
         await send_telegram(chat_id, f"Erreur: {e}")
+
+
+async def cmd_queuefix(chat_id: str, args: str):
+    """Commande /queuefix - Remet les taches failed en pending."""
+    if not graphiti.enabled:
+        await send_telegram(chat_id, "Graphiti desactive.")
+        return
+
+    limit = 100
+    if args:
+        try:
+            limit = max(1, min(int(args.strip()), 1000))
+        except ValueError:
+            await send_telegram(chat_id, "Usage: /queuefix [nombre] (ex: /queuefix 50)")
+            return
+
+    try:
+        import asyncpg
+        conn = await asyncpg.connect(os.getenv(
+            "POSTGRES_DSN", "postgresql://agea:password@postgres:5432/agea_memory"
+        ))
+        try:
+            rows = await conn.fetch(
+                """
+                WITH picked AS (
+                    SELECT id
+                    FROM graphiti_tasks
+                    WHERE status = 'failed'
+                    ORDER BY processed_at NULLS LAST, created_at
+                    LIMIT $1
+                )
+                UPDATE graphiti_tasks t
+                SET status = 'pending',
+                    attempts = 0,
+                    error_message = NULL,
+                    next_retry_at = CURRENT_TIMESTAMP,
+                    processed_at = NULL
+                FROM picked
+                WHERE t.id = picked.id
+                RETURNING t.id
+                """,
+                limit,
+            )
+        finally:
+            await conn.close()
+
+        requeued = len(rows)
+        msg = f"Queue fix: {requeued} tache(s) remises en pending."
+        if graphiti_worker:
+            stats = await graphiti_worker.get_queue_stats()
+            if "error" not in stats:
+                msg += (
+                    f"\n\nQueue Graphiti:\n"
+                    f"- En attente: {stats['pending']}\n"
+                    f"- En cours: {stats['processing']}\n"
+                    f"- Echouees: {stats['failed']}"
+                )
+        await send_telegram(chat_id, msg)
+    except Exception as e:
+        logger.error("Erreur /queuefix: %s", e)
+        await send_telegram(chat_id, f"Erreur queuefix: {e}")
 
 
 # --- Phase 7 : Commandes raisonnement ---
