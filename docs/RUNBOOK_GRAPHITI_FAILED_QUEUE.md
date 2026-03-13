@@ -64,6 +64,9 @@ LIMIT 20;
 Appliquer le garde-fou SQL temporaire:
 
 ```sql
+ALTER TABLE graphiti_tasks
+ALTER COLUMN max_attempts SET DEFAULT 50;
+
 UPDATE graphiti_tasks
 SET max_attempts = 50
 WHERE status IN ('pending','processing','failed')

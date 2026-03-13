@@ -26,6 +26,9 @@ ORDER BY processed_at DESC NULLS LAST
 LIMIT 20;
 
 -- 2) Garde-fou retry (temporaire)
+ALTER TABLE graphiti_tasks
+ALTER COLUMN max_attempts SET DEFAULT 50;
+
 UPDATE graphiti_tasks
 SET max_attempts = 50
 WHERE status IN ('pending','processing','failed')
