@@ -914,19 +914,52 @@ async def cmd_ask(chat_id: str, args: str):
 
     try:
         context_parts = []
-        source_tag = "Graphiti"
+        source_tag = "Memoire"
 
-        # 1. Recherche Graphiti prioritaire (0 appels LLM, sub-second)
+        # 1. Recherche full-text dans les episodes bruts (PostgreSQL)
+        # Plus fiable que les faits Graphiti qui sont fragmentes/anglais
+        try:
+            import asyncpg
+            pool = await graphiti_worker._get_pool() if graphiti_worker else None
+            if pool:
+                async with pool.acquire() as conn:
+                    # Recherche par mots-cles dans le contenu original
+                    # Filtrer les mots vides pour ne garder que les termes significatifs
+                    stop_words = {"tu", "peux", "me", "dir", "dire", "quoi", "sur", "le", "la",
+                                  "les", "des", "du", "un", "une", "de", "et", "est", "que",
+                                  "qui", "dans", "pour", "par", "avec", "son", "ses", "ce",
+                                  "cette", "mon", "ma", "nous", "vous", "ils", "elles", "pas",
+                                  "l'", "d'", "n'", "s'", "c'", "j'", "qu'"}
+                    keywords = [w for w in args.split()
+                                if (len(w) > 2 or w.isupper())
+                                and w.lower().strip("'?!.,") not in stop_words]
+                    if keywords:
+                        # Utiliser OR pour trouver les episodes contenant AU MOINS un mot-cle
+                        like_clauses = " OR ".join(
+                            [f"content ILIKE '%' || ${i+1} || '%'" for i in range(len(keywords))]
+                        )
+                        rows = await conn.fetch(
+                            f"""
+                            SELECT content FROM graphiti_tasks
+                            WHERE status = 'done' AND ({like_clauses})
+                            ORDER BY id DESC LIMIT 8
+                            """,
+                            *keywords,
+                        )
+                        for r in rows:
+                            context_parts.append(r["content"])
+        except Exception as e:
+            logger.warning("Recherche episodes bruts echouee: %s", e)
+
+        # 2. Complement Graphiti (faits semantiques)
         if graphiti.read_enabled:
             graphiti_facts = await graphiti.search(args, num_results=10)
             for f in graphiti_facts:
                 fact_text = f.get("fact", "")
-                if fact_text:
+                if fact_text and fact_text not in context_parts:
                     context_parts.append(fact_text)
-            if context_parts:
-                source_tag = "Graphiti"
 
-        # 2. Fallback historique si pas de resultats Graphiti
+        # 3. Fallback historique si pas de resultats
         if not context_parts:
             history = await conversations.get_memory(last_n=5)
             if history:
