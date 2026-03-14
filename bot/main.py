@@ -918,7 +918,7 @@ async def cmd_ask(chat_id: str, args: str):
 
         # 1. Recherche Graphiti prioritaire (0 appels LLM, sub-second)
         if graphiti.read_enabled:
-            graphiti_facts = await graphiti.search(args, num_results=5)
+            graphiti_facts = await graphiti.search(args, num_results=10)
             for f in graphiti_facts:
                 fact_text = f.get("fact", "")
                 if fact_text:
@@ -948,7 +948,9 @@ async def cmd_ask(chat_id: str, args: str):
             system_prompt += (
                 f"\n\nVoici le contexte pertinent de ta memoire:\n"
                 f"---\n{memory_context}\n---\n"
-                f"Utilise ce contexte pour repondre si pertinent."
+                f"Utilise ce contexte pour repondre. Si le contexte contient des informations "
+                f"pertinentes, synthetise-les clairement. Ne dis JAMAIS 'je ne trouve pas' "
+                f"si le contexte contient des elements de reponse."
             )
 
         # 4. Appeler le LLM
