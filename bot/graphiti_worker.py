@@ -254,8 +254,8 @@ class GraphitiWorker:
                 )
                 logger.warning("Tache #%d echouee definitivement apres %d tentatives", task_id, new_attempts)
             else:
-                # Retry avec backoff exponentiel
-                delay_minutes = 2 ** new_attempts  # 2, 4, 8, 16, 32 min
+                # Retry avec backoff exponentiel, plafonné à 60 min
+                delay_minutes = min(2 ** new_attempts, 60)
                 next_retry = datetime.utcnow() + timedelta(minutes=delay_minutes)
                 await conn.execute(
                     """
