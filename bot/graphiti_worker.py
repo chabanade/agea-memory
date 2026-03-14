@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 
 import httpx
 
+from graphiti_client import QuotaExhaustedError
+
 logger = logging.getLogger("agea.graphiti.worker")
 
 # Connection PostgreSQL directe via Zep's postgres
@@ -187,16 +189,18 @@ class GraphitiWorker:
             else:
                 await self._mark_failed(task_id, "Graphiti returned False")
 
+        except QuotaExhaustedError as e:
+            logger.warning("Tache #%d: quota embeddings epuise (429)", task_id)
+            self._quota_paused_until = datetime.utcnow() + timedelta(seconds=self.QUOTA_PAUSE_SECONDS)
+            logger.warning("Worker: PAUSE GLOBALE %ds — quota Gemini epuise", self.QUOTA_PAUSE_SECONDS)
+            await self._mark_failed(task_id, str(e))
         except Exception as e:
             error_str = str(e)
             logger.error("Erreur tache #%d: %s", task_id, e)
-            # Detecter quota Gemini epuise → pause globale du worker
+            # Detecter quota Gemini epuise dans d'autres exceptions
             if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                 self._quota_paused_until = datetime.utcnow() + timedelta(seconds=self.QUOTA_PAUSE_SECONDS)
-                logger.warning(
-                    "Worker: quota embeddings epuise (429), pause globale %ds",
-                    self.QUOTA_PAUSE_SECONDS,
-                )
+                logger.warning("Worker: PAUSE GLOBALE %ds — quota detecte", self.QUOTA_PAUSE_SECONDS)
             await self._mark_failed(task_id, error_str)
 
     async def _update_status(self, task_id: int, status: str):

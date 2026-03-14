@@ -18,6 +18,11 @@ import os
 import json
 import logging
 import typing
+
+
+class QuotaExhaustedError(Exception):
+    """Levee quand le quota embeddings (Gemini) est epuise (429)."""
+    pass
 from datetime import datetime
 from typing import Any, Optional
 
@@ -241,7 +246,11 @@ class GraphitiClient:
             return True
 
         except Exception as e:
+            error_str = str(e)
             logger.error("Erreur ingestion episode: %s", e)
+            # Remonter les erreurs 429 quota vers le worker pour qu'il pause
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                raise QuotaExhaustedError(error_str) from e
             if self._is_connection_error(e):
                 self._available = False
             return False
