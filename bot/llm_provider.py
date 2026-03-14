@@ -7,6 +7,7 @@ Claude utilise l'API native Anthropic /v1/messages.
 """
 
 import os
+import asyncio
 import logging
 from typing import Optional
 
@@ -14,13 +15,15 @@ import httpx
 
 logger = logging.getLogger("agea.llm")
 
+MAX_RETRIES = 1  # 1 retry sur timeout/erreur transitoire
+
 # Configuration des providers (tous compatibles format OpenAI)
 LLM_CONFIGS = {
     "deepseek": {
         "base_url": "https://api.deepseek.com/v1",
         "model": "deepseek-chat",
         "api_key_env": "DEEPSEEK_API_KEY",
-        "timeout": 15,
+        "timeout": 30,
         "cost_per_1k_input": 0.00028,
         "cost_per_1k_output": 0.00042,
     },
@@ -116,7 +119,7 @@ class LLMProvider:
 
             try:
                 attempted += 1
-                result = await self._call_provider(p, messages, temperature, max_tokens)
+                result = await self._call_with_retry(p, messages, temperature, max_tokens)
                 if p != self.current_provider:
                     logger.warning("Fallback vers %s (defaut %s indisponible)", p, self.current_provider)
                 return result
@@ -131,6 +134,31 @@ class LLMProvider:
             )
 
         raise RuntimeError(f"Tous les providers ont echoue. Derniere erreur: {last_error}")
+
+    async def _call_with_retry(
+        self,
+        provider: str,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """Appelle un provider avec 1 retry sur timeout/erreur transitoire."""
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                return await self._call_provider(provider, messages, temperature, max_tokens)
+            except (httpx.TimeoutException, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                if attempt < MAX_RETRIES:
+                    logger.info("Provider %s timeout (tentative %d), retry dans 2s...", provider, attempt + 1)
+                    await asyncio.sleep(2)
+                    continue
+                raise
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code in (502, 503, 429) and attempt < MAX_RETRIES:
+                    logger.info("Provider %s erreur %d (tentative %d), retry dans 3s...",
+                                provider, e.response.status_code, attempt + 1)
+                    await asyncio.sleep(3)
+                    continue
+                raise
 
     async def _call_provider(
         self,

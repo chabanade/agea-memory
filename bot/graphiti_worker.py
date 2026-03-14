@@ -26,6 +26,11 @@ POSTGRES_DSN = os.getenv(
 class GraphitiWorker:
     """Worker asynchrone qui consomme la queue PostgreSQL."""
 
+    # Quota Gemini embeddings gratuit = 1000/jour
+    # On reserve ~400 pour les recherches /ask, le worker utilise max 600
+    DAILY_TASK_LIMIT = 600
+    QUOTA_PAUSE_SECONDS = 300  # 5 min de pause sur 429
+
     def __init__(self, graphiti_client):
         """
         Args:
@@ -34,6 +39,9 @@ class GraphitiWorker:
         self.graphiti = graphiti_client
         self._running = False
         self._pool = None
+        self._daily_count = 0
+        self._last_reset = datetime.utcnow().date()
+        self._quota_paused_until = None
 
     async def _get_pool(self):
         """Cree ou retourne le pool de connexion asyncpg."""
@@ -67,6 +75,28 @@ class GraphitiWorker:
 
         while self._running:
             try:
+                # Reset compteur quotidien a minuit UTC
+                today = datetime.utcnow().date()
+                if today != self._last_reset:
+                    logger.info("Worker: reset compteur quotidien (%d taches hier)", self._daily_count)
+                    self._daily_count = 0
+                    self._last_reset = today
+
+                # Pause quota si 429 recu recemment
+                if self._quota_paused_until and datetime.utcnow() < self._quota_paused_until:
+                    remaining = (self._quota_paused_until - datetime.utcnow()).total_seconds()
+                    logger.info("Worker: quota pause, reprise dans %ds", int(remaining))
+                    await asyncio.sleep(min(remaining, 60))
+                    continue
+                self._quota_paused_until = None
+
+                # Limite quotidienne atteinte
+                if self._daily_count >= self.DAILY_TASK_LIMIT:
+                    logger.info("Worker: limite quotidienne atteinte (%d/%d), pause 10min",
+                                self._daily_count, self.DAILY_TASK_LIMIT)
+                    await asyncio.sleep(600)
+                    continue
+
                 if not self.graphiti.available:
                     status = await self.graphiti.health_check()
                     if not self.graphiti.available:
@@ -86,9 +116,10 @@ class GraphitiWorker:
                     if not self._running:
                         break
                     await self._process_task(task)
+                    self._daily_count += 1
 
                 # Pause entre batches (respect rate limits)
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
 
             except asyncio.CancelledError:
                 logger.info("Worker Graphiti arrete (cancel)")
@@ -157,8 +188,16 @@ class GraphitiWorker:
                 await self._mark_failed(task_id, "Graphiti returned False")
 
         except Exception as e:
+            error_str = str(e)
             logger.error("Erreur tache #%d: %s", task_id, e)
-            await self._mark_failed(task_id, str(e))
+            # Detecter quota Gemini epuise → pause globale du worker
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                self._quota_paused_until = datetime.utcnow() + timedelta(seconds=self.QUOTA_PAUSE_SECONDS)
+                logger.warning(
+                    "Worker: quota embeddings epuise (429), pause globale %ds",
+                    self.QUOTA_PAUSE_SECONDS,
+                )
+            await self._mark_failed(task_id, error_str)
 
     async def _update_status(self, task_id: int, status: str):
         """Met a jour le statut d'une tache."""
