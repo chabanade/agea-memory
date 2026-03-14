@@ -33,6 +33,7 @@ NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 GRAPHITI_GROUP_ID = "mehdi-agea"
 SEMAPHORE_LIMIT = int(os.getenv("SEMAPHORE_LIMIT", "3"))
@@ -153,7 +154,7 @@ class GraphitiClient:
             from graphiti_core import Graphiti
             from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
             from graphiti_core.llm_client.config import LLMConfig
-            from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
+            from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
             from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 
             # Patch DeepSeek (json_object au lieu de json_schema)
@@ -170,11 +171,11 @@ class GraphitiClient:
 
             llm_client = OpenAIGenericClient(config=llm_config)
 
-            # Embeddings : Gemini (gratuit, 1 appel par search)
-            embedder = GeminiEmbedder(
-                config=GeminiEmbedderConfig(
-                    api_key=GOOGLE_API_KEY,
-                    embedding_model="gemini-embedding-001",
+            # Embeddings : OpenAI text-embedding-3-small (~$0.02/1M tokens, sans quota)
+            embedder = OpenAIEmbedder(
+                config=OpenAIEmbedderConfig(
+                    api_key=OPENAI_API_KEY,
+                    embedding_model="text-embedding-3-small",
                 ),
             )
 
