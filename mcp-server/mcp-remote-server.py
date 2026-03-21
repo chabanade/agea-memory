@@ -245,6 +245,92 @@ async def search_decisions(query: str, limit: int = 5) -> str:
         return f"{len(lines)} decision(s) pour '{query}':\n" + "\n".join(lines)
 
 
+# =========================================
+# LEXIA — Outils juridiques
+# =========================================
+
+
+@mcp.tool()
+async def search_legal(query: str, code: str = "", limit: int = 5) -> str:
+    """Cherche dans les codes et lois francais via API Legifrance.
+
+    UTILISER pour toute question juridique, reglementaire ou normative.
+    Retourne les articles de loi pertinents.
+
+    Args:
+        query: La recherche juridique (ex: "tarif achat photovoltaique", "obligation RGE")
+        code: Nom du code si connu (ex: "Code de l'energie"). Vide = tous les codes.
+        limit: Nombre max de resultats (defaut: 5)
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{AGEA_API_URL}/api/lexia/search",
+            params={"q": query, "code": code},
+            headers=_headers(),
+        )
+        if resp.status_code != 200:
+            return f"Erreur API LEXIA: {resp.status_code}"
+        data = resp.json()
+        if data.get("error"):
+            return f"LEXIA desactive: {data['error']}"
+        results = data.get("results", [])
+        if not results:
+            return f"Aucun texte de loi trouve pour '{query}'"
+        lines = []
+        for r in results[:limit]:
+            title = r.get("title", "")
+            content = r.get("content", "")[:200]
+            meta = r.get("metadata", {})
+            code_name = meta.get("code", "")
+            line = f"- {title}"
+            if code_name:
+                line += f" ({code_name})"
+            if content:
+                line += f"\n  {content}..."
+            lines.append(line)
+        return f"{len(lines)} texte(s) pour '{query}':\n" + "\n".join(lines)
+
+
+@mcp.tool()
+async def search_jurisprudence(query: str, limit: int = 5) -> str:
+    """Cherche dans la jurisprudence francaise (Cour de Cassation, Cours d'appel).
+
+    UTILISER pour trouver des decisions de justice, des arrets, des precedents.
+    Source : API Judilibre (Cour de Cassation).
+
+    Args:
+        query: La recherche (ex: "contestation notation marche public", "refere precontractuel")
+        limit: Nombre max de resultats (defaut: 5)
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{AGEA_API_URL}/api/lexia/jurisprudence",
+            params={"q": query, "limit": limit},
+            headers=_headers(),
+        )
+        if resp.status_code != 200:
+            return f"Erreur API LEXIA: {resp.status_code}"
+        data = resp.json()
+        if data.get("error"):
+            return f"LEXIA desactive: {data['error']}"
+        results = data.get("results", [])
+        if not results:
+            return f"Aucune jurisprudence trouvee pour '{query}'"
+        lines = []
+        for r in results[:limit]:
+            title = r.get("title", "")
+            meta = r.get("metadata", {})
+            solution = meta.get("solution", "")
+            ecli = meta.get("ecli", "")
+            line = f"- {title}"
+            if solution:
+                line += f" — {solution}"
+            if ecli:
+                line += f" (ECLI: {ecli})"
+            lines.append(line)
+        return f"{len(lines)} decision(s) pour '{query}':\n" + "\n".join(lines)
+
+
 if __name__ == "__main__":
     logger.info("Demarrage MCP Remote Server AGEA sur port 8888")
     mcp.run(transport="streamable-http")

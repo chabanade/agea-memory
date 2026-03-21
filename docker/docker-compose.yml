@@ -89,6 +89,10 @@ services:
       DAILY_SUMMARY_HOUR: ${DAILY_SUMMARY_HOUR:-20}
       PROACTIVE_ENABLED: ${PROACTIVE_ENABLED:-true}
       PROACTIVE_HOUR: ${PROACTIVE_HOUR:-8}
+      # LEXIA - Agent Juridique
+      PISTE_CLIENT_ID: ${PISTE_CLIENT_ID:-}
+      PISTE_CLIENT_SECRET: ${PISTE_CLIENT_SECRET:-}
+      LEXIA_ENABLED: ${LEXIA_ENABLED:-false}
     ports:
       - "8000:8000"
     healthcheck:

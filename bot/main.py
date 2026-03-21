@@ -25,6 +25,10 @@ from intent_detector import detect_intent, detect_business_tag, format_response,
 from daily_summary import DailySummary
 from proactive import ProactiveAgent
 from reasoning_formatter import format_reasoning, format_reasoning_response
+from lexia import (
+    LexiaClient, format_legifrance_results,
+    format_jurisprudence_results, format_veille_results,
+)
 
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -47,6 +51,7 @@ conversations = ConversationStore()
 graphiti = GraphitiClient()
 graphiti_worker = None  # Initialise dans le lifespan
 voice = VoiceHandler()
+lexia_client = LexiaClient()
 
 
 @asynccontextmanager
@@ -102,6 +107,13 @@ async def lifespan(app: FastAPI):
         logger.info("Cron relances proactives lance")
     else:
         logger.info("MEHDI_CHAT_ID non configure — crons 6D/6E desactives")
+
+    # Initialiser LEXIA (agent juridique)
+    lexia_ok = await lexia_client.initialize()
+    if lexia_ok:
+        logger.info("LEXIA initialise — API Legifrance connectee")
+    else:
+        logger.info("LEXIA non disponible (desactive ou cles PISTE manquantes)")
 
     polling_task = None
     if TELEGRAM_MODE == "polling":
@@ -678,6 +690,10 @@ async def handle_command(chat_id: str, text: str):
         "/doute": cmd_doute,
         "/lecon": cmd_lecon,
         "/review": cmd_review,
+        # LEXIA : Agent juridique
+        "/loi": cmd_loi,
+        "/jurisprudence": cmd_jurisprudence,
+        "/veille": cmd_veille,
     }
 
     handler = handlers.get(command)
@@ -1386,6 +1402,124 @@ async def edit_telegram(chat_id: str, message_id: int, text: str):
             "text": text,
             "parse_mode": "HTML",
         })
+
+
+# =========================================
+# LEXIA — Commandes juridiques
+# =========================================
+
+
+async def cmd_loi(chat_id: str, args: str):
+    """Recherche dans les codes via API Legifrance."""
+    if not lexia_client.enabled:
+        await send_telegram(chat_id, "⚠️ LEXIA desactive. Verifier PISTE_CLIENT_ID dans .env")
+        return
+    if not args:
+        await send_telegram(chat_id,
+            "📜 Usage : /loi <recherche> [code]\n"
+            "Exemples :\n"
+            "  /loi tarif achat photovoltaique\n"
+            "  /loi article L314-1\n"
+            "  /loi obligation achat Code de l'energie"
+        )
+        return
+
+    msg_id = await send_telegram(chat_id, "🔍 Recherche dans les codes...", return_message_id=True)
+
+    # Detecter si un nom de code est mentionne
+    code_name = ""
+    code_keywords = {
+        "code de l'energie": "Code de l'énergie",
+        "code energie": "Code de l'énergie",
+        "code marches publics": "Code de la commande publique",
+        "code commande publique": "Code de la commande publique",
+        "code urbanisme": "Code de l'urbanisme",
+        "code environnement": "Code de l'environnement",
+        "code travail": "Code du travail",
+        "code civil": "Code civil",
+    }
+    args_lower = args.lower()
+    for kw, name in code_keywords.items():
+        if kw in args_lower:
+            code_name = name
+            args = args_lower.replace(kw, "").strip()
+            break
+
+    results = await lexia_client.search_code(args, code_name)
+    response = format_legifrance_results(results, args)
+    await edit_telegram(chat_id, msg_id, response)
+
+
+async def cmd_jurisprudence(chat_id: str, args: str):
+    """Recherche dans la jurisprudence via API Judilibre."""
+    if not lexia_client.enabled:
+        await send_telegram(chat_id, "⚠️ LEXIA desactive. Verifier PISTE_CLIENT_ID dans .env")
+        return
+    if not args:
+        await send_telegram(chat_id,
+            "⚖️ Usage : /jurisprudence <recherche>\n"
+            "Exemples :\n"
+            "  /jurisprudence contestation marche public notation\n"
+            "  /jurisprudence refere precontractuel favoritisme\n"
+            "  /jurisprudence photovoltaique vice cache"
+        )
+        return
+
+    msg_id = await send_telegram(chat_id, "🔍 Recherche jurisprudence...", return_message_id=True)
+    results = await lexia_client.search_jurisprudence(args)
+    response = format_jurisprudence_results(results, args)
+    await edit_telegram(chat_id, msg_id, response)
+
+
+async def cmd_veille(chat_id: str, args: str):
+    """Affiche les derniers textes ENR du JORF."""
+    if not lexia_client.enabled:
+        await send_telegram(chat_id, "⚠️ LEXIA desactive. Verifier PISTE_CLIENT_ID dans .env")
+        return
+
+    msg_id = await send_telegram(chat_id, "📰 Recherche veille ENR...", return_message_id=True)
+    results = await lexia_client.check_veille()
+    response = format_veille_results(results)
+    await edit_telegram(chat_id, msg_id, response)
+
+
+# =========================================
+# LEXIA — Endpoints API REST
+# =========================================
+
+
+@app.get("/api/lexia/search", tags=["lexia"], operation_id="lexiaSearch")
+async def api_lexia_search(
+    q: str, code: str = "", authorization: str = Header(default="")
+):
+    """Recherche dans les codes Legifrance."""
+    await verify_bearer(authorization)
+    if not lexia_client.enabled:
+        return {"error": "LEXIA desactive"}
+    results = await lexia_client.search_code(q, code)
+    return {"results": results, "count": len(results)}
+
+
+@app.get("/api/lexia/jurisprudence", tags=["lexia"], operation_id="lexiaJurisprudence")
+async def api_lexia_jurisprudence(
+    q: str, limit: int = 5, authorization: str = Header(default="")
+):
+    """Recherche jurisprudence via Judilibre."""
+    await verify_bearer(authorization)
+    if not lexia_client.enabled:
+        return {"error": "LEXIA desactive"}
+    results = await lexia_client.search_jurisprudence(q, limit)
+    return {"results": results, "count": len(results)}
+
+
+@app.get("/api/lexia/veille", tags=["lexia"], operation_id="lexiaVeille")
+async def api_lexia_veille(authorization: str = Header(default="")):
+    """Derniers textes ENR du JORF."""
+    await verify_bearer(authorization)
+    if not lexia_client.enabled:
+        return {"error": "LEXIA desactive"}
+    results = await lexia_client.check_veille()
+    return {"results": results, "count": len(results)}
 
 
 if __name__ == "__main__":
