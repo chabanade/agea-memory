@@ -1,0 +1,150 @@
+# ===========================================
+# AGEA Memory System - Docker Compose
+# ===========================================
+# Deploiement : docker compose --env-file ../.env up -d
+# Le .env est a la racine du projet (un niveau au-dessus)
+# ===========================================
+
+services:
+  # --- PostgreSQL (conversations + Graphiti queue) ---
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agea
+
+  # --- Neo4j (Knowledge Graph - Graphiti) ---
+  neo4j:
+    image: neo4j:5.26.0
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_memory_heap_initial__size: "512m"
+      NEO4J_dbms_memory_heap_max__size: "512m"
+      NEO4J_dbms_memory_pagecache_size: "512m"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - agea
+
+  # --- Bot AGEA (FastAPI + Telegram) ---
+  bot:
+    build:
+      context: ../bot
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
+      ZEP_SECRET_KEY: ${ZEP_SECRET_KEY}  # Retrocompat: utilise comme AGEA_API_TOKEN
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-gemini}
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      TELEGRAM_MODE: ${TELEGRAM_MODE:-polling}
+      BOT_DOMAIN: ${BOT_DOMAIN:-}
+      # Graphiti / Neo4j
+      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      POSTGRES_DSN: ${POSTGRES_DSN:-postgresql://agea:password@postgres:5432/agea_memory}
+      GRAPHITI_ENABLED: ${GRAPHITI_ENABLED:-true}
+      GRAPHITI_READ_ENABLED: ${GRAPHITI_READ_ENABLED:-true}
+      SEMAPHORE_LIMIT: ${SEMAPHORE_LIMIT:-3}
+      # Phase 5.1 - Vocal
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # Phase 6D/6E - Resume quotidien + Relances proactives
+      MEHDI_CHAT_ID: ${MEHDI_CHAT_ID:-}
+      DAILY_SUMMARY_ENABLED: ${DAILY_SUMMARY_ENABLED:-true}
+      DAILY_SUMMARY_HOUR: ${DAILY_SUMMARY_HOUR:-20}
+      PROACTIVE_ENABLED: ${PROACTIVE_ENABLED:-true}
+      PROACTIVE_HOUR: ${PROACTIVE_HOUR:-8}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agea
+
+  # --- MCP Remote Server (Streamable HTTP pour Claude.ai) ---
+  mcp-remote:
+    build:
+      context: ../mcp-server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      bot:
+        condition: service_healthy
+    environment:
+      AGEA_API_URL: http://bot:8000
+      AGEA_API_TOKEN: ${ZEP_SECRET_KEY}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8888),2); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - agea
+
+  # --- Caddy (Reverse Proxy + HTTPS auto) ---
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - bot
+      - mcp-remote
+    environment:
+      BOT_DOMAIN: ${BOT_DOMAIN:-srv987452.hstgr.cloud}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - agea
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  neo4j_logs:
+  caddy_data:
+  caddy_config:
+
+networks:
+  agea:
+    driver: bridge
