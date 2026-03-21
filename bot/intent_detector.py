@@ -41,6 +41,9 @@ INTENT_PATTERNS = {
         r"(favoritisme|notation truqu[eé]|irr[eé]gularit[eé]|marche public.+droit)",
         r"(code.+march[eé]|code.+commande publique|code.+[eé]nergie|code.+urbanisme)",
         r"(tribunal administratif|conseil d['\u2019][eé]tat|juge administratif)",
+        r"(quel.+recours|quels?.+droits?.+juridique|proc[eé]dure.+contre|attaquer.+march[eé])",
+        r"(revue juridique|analyse juridique|v[eé]rif.+l[eé]gal|cadre l[eé]gal)",
+        r"(clause abusive|ill[eé]gal|irr[eé]gulier|vice de proc[eé]dure)",
     ],
 }
 
