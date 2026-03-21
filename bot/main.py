@@ -708,7 +708,24 @@ async def handle_message(chat_id: str, text: str):
     intent = detect_intent(text)
     logger.info("Intent detecte: %s pour: %s", intent, text[:80])
 
-    if intent == "question":
+    if intent == "legal_search":
+        # LEXIA : recherche juridique automatique
+        if lexia_client.enabled:
+            # Determiner si c'est plutot jurisprudence ou code
+            text_lower = text.lower()
+            if any(kw in text_lower for kw in [
+                "jurisprudence", "arret", "arrêt", "cour", "tribunal",
+                "contestation", "recours", "favoritisme", "litige",
+            ]):
+                await cmd_jurisprudence(chat_id, text)
+            else:
+                await cmd_loi(chat_id, text)
+        else:
+            await send_telegram(chat_id,
+                "⚖️ Intention juridique detectee, mais LEXIA n'est pas active.\n"
+                "Configurer PISTE_CLIENT_ID dans .env pour activer."
+            )
+    elif intent == "question":
         await cmd_ask(chat_id, text)
     elif intent == "correction":
         await route_memo(chat_id, text, intent="correction")

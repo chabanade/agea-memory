@@ -33,6 +33,15 @@ INTENT_PATTERNS = {
         r"^(oublie|supprime|efface|retire|annule)",
         r"(c['\u2019]est plus d['\u2019]actualit[eé]|c['\u2019]est annul[eé]|on annule)",
     ],
+    "legal_search": [
+        r"(jurisprudence|arret|arr[eê]t|d[eé]cision de justice|cour de cassation|cour d['\u2019]appel)",
+        r"(article de loi|code de l['\u2019]|texte de loi|l[eé]gifrance)",
+        r"(conforme|conformit[eé]|r[eé]glementation|norme juridique)",
+        r"(contester|contestation|r[eé]f[eé]r[eé] pr[eé]contractuel|recours|litige)",
+        r"(favoritisme|notation truqu[eé]|irr[eé]gularit[eé]|marche public.+droit)",
+        r"(code.+march[eé]|code.+commande publique|code.+[eé]nergie|code.+urbanisme)",
+        r"(tribunal administratif|conseil d['\u2019][eé]tat|juge administratif)",
+    ],
 }
 
 # --- Phase 6B : Tags metier ---
