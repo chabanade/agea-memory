@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+import json
+
 import httpx
 import asyncpg
 
@@ -389,7 +391,7 @@ class LexiaClient:
                     article.get("article_id", str(uuid4())),
                     article.get("title", ""),
                     article.get("content", ""),
-                    article.get("metadata", {}),
+                    json.dumps(article.get("metadata", {}), ensure_ascii=False) if isinstance(article.get("metadata"), dict) else str(article.get("metadata", "")),
                 )
             return True
         except Exception as e:
