@@ -722,14 +722,16 @@ async def handle_message(chat_id: str, text: str):
             judi_kw = ["jurisprudence", "arret", "arrêt", "cour de cassation",
                        "contestation", "recours", "favoritisme", "litige",
                        "penal", "pénal", "code penal"]
+            # Ajouter "ta " et "ta nice" aux mots-cles admin
+            admin_kw.extend(["ta nice", "ta marseille", "ta toulon", "ta "])
             is_admin = any(kw in text_lower for kw in admin_kw)
             is_judi = any(kw in text_lower for kw in judi_kw)
-            if is_admin and not is_judi:
+            if is_admin:
+                # Admin toujours en premier quand detecte
                 await cmd_admin_jurisprudence(chat_id, text)
-            elif is_admin and is_judi:
-                # Les deux : lancer les deux en parallele
-                await cmd_admin_jurisprudence(chat_id, text)
-                await cmd_jurisprudence(chat_id, text)
+                if is_judi:
+                    # Completer avec Judilibre si mots-cles judiciaires aussi
+                    await cmd_jurisprudence(chat_id, text)
             elif is_judi:
                 await cmd_jurisprudence(chat_id, text)
             else:
