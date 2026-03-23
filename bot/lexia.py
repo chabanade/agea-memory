@@ -602,7 +602,7 @@ def format_admin_results(results: list[dict], query: str) -> str:
         lines.append(f"**{i}. {title}**")
         if type_dec:
             lines.append(f"   Type : {type_dec}")
-        if formation:
+        if formation and formation != "undefined":
             lines.append(f"   Formation : {formation}")
         if ecli and ecli != "undefined":
             lines.append(f"   ECLI : {ecli}")
