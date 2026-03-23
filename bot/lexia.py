@@ -35,6 +35,18 @@ JUDILIBRE_API_URL = os.getenv(
     "https://api.piste.gouv.fr/cassation/judilibre/v1.0",
 )
 LEXIA_ENABLED = os.getenv("LEXIA_ENABLED", "false").lower() == "true"
+OPENDATA_ADMIN_URL = "https://opendata.justice-administrative.fr/recherche/api"
+
+# Codes juridictions administratives (Open Data Justice Administrative)
+JURIDICTIONS_ADMIN = {
+    "CE": "Conseil d'État",
+    "CAA13": "CAA Marseille",
+    "CAA75": "CAA Paris",
+    "CAA69": "CAA Lyon",
+    "TA06": "TA Nice",
+    "TA13": "TA Marseille",
+    "TA83": "TA Toulon",
+}
 POSTGRES_DSN = os.getenv(
     "POSTGRES_DSN", "postgresql://agea:password@postgres:5432/agea_memory"
 )
@@ -317,6 +329,73 @@ class LexiaClient:
             return []
 
     # =========================================
+    # JURISPRUDENCE ADMINISTRATIVE (Open Data)
+    # =========================================
+
+    async def search_admin_jurisprudence(
+        self, query: str, juridiction: str = "", max_results: int = 10
+    ) -> list[dict]:
+        """Recherche dans la jurisprudence administrative (TA, CAA, CE).
+
+        Source : Open Data Justice Administrative (opendata.justice-administrative.fr).
+        Pas besoin de token PISTE — API publique.
+
+        Args:
+            query: Texte a rechercher (ex: "attribution marche public")
+            juridiction: Code juridiction (ex: "TA06" pour TA Nice, "CE", "CAA13"). Vide = toutes.
+            max_results: Nombre max de resultats (max 200).
+        """
+        try:
+            if max_results > 200:
+                max_results = 200
+
+            if juridiction:
+                url = f"{OPENDATA_ADMIN_URL}/model_search_juri/openData/{juridiction}/{query}/{max_results}"
+            else:
+                url = f"{OPENDATA_ADMIN_URL}/Simple_Search/openData/{query}/{max_results}"
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    logger.error("Open Data Admin search %d: %s", resp.status_code, resp.text[:300])
+                    return []
+
+                data = resp.json()
+                hits_data = data.get("decisions", {}).get("body", {}).get("hits", {})
+                total = hits_data.get("total", {}).get("value", 0)
+                hits = hits_data.get("hits", [])
+
+                results = []
+                for h in hits:
+                    src = h.get("_source", {})
+                    result = {
+                        "source": "admin_opendata",
+                        "article_id": f"admin-{h.get('_id', str(uuid4()))}",
+                        "title": f"{src.get('Nom_Juridiction', '')} — {src.get('Date_Lecture', '')} — N° {src.get('Numero_Dossier', '')}",
+                        "content": "",
+                        "metadata": {
+                            "juridiction": src.get("Nom_Juridiction", ""),
+                            "code_juridiction": src.get("Code_Juridiction", ""),
+                            "date_lecture": src.get("Date_Lecture", ""),
+                            "numero_dossier": src.get("Numero_Dossier", ""),
+                            "ecli": src.get("Numero_ECLI", ""),
+                            "type_decision": src.get("Type_Decision", ""),
+                            "formation": src.get("Formation_Jugement", ""),
+                            "publication": src.get("Code_Publication", ""),
+                        },
+                        "total_results": total,
+                    }
+                    results.append(result)
+                    await self._store_article(result)
+
+                logger.info("Open Data Admin: %d/%d resultats pour '%s'", len(results), total, query)
+                return results
+
+        except Exception as e:
+            logger.error("Open Data Admin search exception: %s", e)
+            return []
+
+    # =========================================
     # VEILLE JORF (derniers textes ENR)
     # =========================================
 
@@ -502,6 +581,31 @@ def format_jurisprudence_results(results: list[dict], query: str) -> str:
         content = r.get("content", "")[:150]
         if content:
             lines.append(f"   {content}...")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_admin_results(results: list[dict], query: str) -> str:
+    """Formate les resultats jurisprudence administrative pour Telegram."""
+    if not results:
+        return f"Aucune decision administrative trouvee pour \"{query}\"."
+
+    total = results[0].get("total_results", len(results)) if results else 0
+    lines = [f"🏛️ **Jurisprudence Administrative** ({len(results)}/{total}) :\n"]
+    for i, r in enumerate(results[:10], 1):
+        title = r.get("title", "")[:120]
+        meta = r.get("metadata", {})
+        ecli = meta.get("ecli", "")
+        type_dec = meta.get("type_decision", "")
+        formation = meta.get("formation", "")
+        lines.append(f"**{i}. {title}**")
+        if type_dec:
+            lines.append(f"   Type : {type_dec}")
+        if formation:
+            lines.append(f"   Formation : {formation}")
+        if ecli and ecli != "undefined":
+            lines.append(f"   ECLI : {ecli}")
         lines.append("")
 
     return "\n".join(lines)

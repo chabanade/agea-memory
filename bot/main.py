@@ -28,6 +28,7 @@ from reasoning_formatter import format_reasoning, format_reasoning_response
 from lexia import (
     LexiaClient, format_legifrance_results,
     format_jurisprudence_results, format_veille_results,
+    format_admin_results,
 )
 
 # --- Configuration ---
@@ -693,6 +694,7 @@ async def handle_command(chat_id: str, text: str):
         # LEXIA : Agent juridique
         "/loi": cmd_loi,
         "/jurisprudence": cmd_jurisprudence,
+        "/ta": cmd_admin_jurisprudence,
         "/veille": cmd_veille,
     }
 
@@ -711,12 +713,24 @@ async def handle_message(chat_id: str, text: str):
     if intent == "legal_search":
         # LEXIA : recherche juridique automatique
         if lexia_client.enabled:
-            # Determiner si c'est plutot jurisprudence ou code
             text_lower = text.lower()
-            if any(kw in text_lower for kw in [
-                "jurisprudence", "arret", "arrêt", "cour", "tribunal",
-                "contestation", "recours", "favoritisme", "litige",
-            ]):
+            # Jurisprudence administrative (TA, CAA, CE, marché public)
+            admin_kw = ["tribunal administratif", "conseil d'etat", "conseil d'état",
+                        "marche public", "marché public", "attribution", "refere precontractuel",
+                        "référé précontractuel", "exces de pouvoir", "excès de pouvoir",
+                        "droit administratif", "collectivite", "commune", "mairie", "ville de"]
+            judi_kw = ["jurisprudence", "arret", "arrêt", "cour de cassation",
+                       "contestation", "recours", "favoritisme", "litige",
+                       "penal", "pénal", "code penal"]
+            is_admin = any(kw in text_lower for kw in admin_kw)
+            is_judi = any(kw in text_lower for kw in judi_kw)
+            if is_admin and not is_judi:
+                await cmd_admin_jurisprudence(chat_id, text)
+            elif is_admin and is_judi:
+                # Les deux : lancer les deux en parallele
+                await cmd_admin_jurisprudence(chat_id, text)
+                await cmd_jurisprudence(chat_id, text)
+            elif is_judi:
                 await cmd_jurisprudence(chat_id, text)
             else:
                 await cmd_loi(chat_id, text)
@@ -1488,6 +1502,39 @@ async def cmd_jurisprudence(chat_id: str, args: str):
     await edit_telegram(chat_id, msg_id, response)
 
 
+async def cmd_admin_jurisprudence(chat_id: str, args: str):
+    """Recherche jurisprudence administrative (TA, CAA, CE) via Open Data."""
+    if not lexia_client.enabled:
+        await send_telegram(chat_id, "⚠️ LEXIA desactive. Verifier PISTE_CLIENT_ID dans .env")
+        return
+    if not args:
+        await send_telegram(chat_id,
+            "🏛️ Usage : /ta <recherche>\n"
+            "Exemples :\n"
+            "  /ta attribution marche public photovoltaique\n"
+            "  /ta refere precontractuel commune\n"
+            "  /ta annulation deliberation urbanisme"
+        )
+        return
+
+    # Detecter si une juridiction specifique est mentionnee
+    text_lower = args.lower()
+    juridiction = ""
+    if "nice" in text_lower or "ta06" in text_lower or "ta nice" in text_lower:
+        juridiction = "TA06"
+    elif "marseille" in text_lower and "caa" in text_lower:
+        juridiction = "CAA13"
+    elif "toulon" in text_lower:
+        juridiction = "TA83"
+    elif "conseil d" in text_lower or "ce " in text_lower:
+        juridiction = "CE"
+
+    msg_id = await send_telegram(chat_id, "🏛️ Recherche jurisprudence administrative...", return_message_id=True)
+    results = await lexia_client.search_admin_jurisprudence(args, juridiction)
+    response = format_admin_results(results, args)
+    await edit_telegram(chat_id, msg_id, response)
+
+
 async def cmd_veille(chat_id: str, args: str):
     """Affiche les derniers textes ENR du JORF."""
     if not lexia_client.enabled:
@@ -1536,6 +1583,19 @@ async def api_lexia_veille(authorization: str = Header(default="")):
     if not lexia_client.enabled:
         return {"error": "LEXIA desactive"}
     results = await lexia_client.check_veille()
+    return {"results": results, "count": len(results)}
+
+
+@app.get("/api/lexia/admin", tags=["lexia"], operation_id="lexiaAdmin")
+async def api_lexia_admin(
+    q: str, juridiction: str = "", limit: int = 10,
+    authorization: str = Header(default="")
+):
+    """Recherche jurisprudence administrative (TA, CAA, CE) via Open Data."""
+    await verify_bearer(authorization)
+    if not lexia_client.enabled:
+        return {"error": "LEXIA desactive"}
+    results = await lexia_client.search_admin_jurisprudence(q, juridiction, limit)
     return {"results": results, "count": len(results)}
 
 

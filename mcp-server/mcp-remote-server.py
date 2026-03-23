@@ -331,6 +331,81 @@ async def search_jurisprudence(query: str, limit: int = 5) -> str:
         return f"{len(lines)} decision(s) pour '{query}':\n" + "\n".join(lines)
 
 
+@mcp.tool()
+async def search_admin_jurisprudence(query: str, juridiction: str = "", limit: int = 10) -> str:
+    """Cherche dans la jurisprudence ADMINISTRATIVE (Tribunaux Administratifs, CAA, Conseil d'Etat).
+
+    UTILISER pour les contentieux de droit public : marches publics, urbanisme,
+    contestation decisions administratives, refere precontractuel, exces de pouvoir.
+    Source : Open Data Justice Administrative (613 000+ decisions).
+
+    Juridictions PACA disponibles : TA06 (Nice), TA13 (Marseille), TA83 (Toulon),
+    CAA13 (Marseille), CE (Conseil d'Etat).
+
+    Args:
+        query: La recherche (ex: "attribution marche public photovoltaique")
+        juridiction: Code juridiction (ex: "TA06" pour Nice). Vide = toutes.
+        limit: Nombre max de resultats (defaut: 10, max: 200)
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{AGEA_API_URL}/api/lexia/admin",
+            params={"q": query, "juridiction": juridiction, "limit": limit},
+            headers=_headers(),
+        )
+        if resp.status_code != 200:
+            return f"Erreur API LEXIA: {resp.status_code}"
+        data = resp.json()
+        if data.get("error"):
+            return f"LEXIA desactive: {data['error']}"
+        results = data.get("results", [])
+        if not results:
+            return f"Aucune decision administrative trouvee pour '{query}'"
+        total = results[0].get("total_results", len(results)) if results else 0
+        lines = []
+        for r in results[:limit]:
+            title = r.get("title", "")
+            meta = r.get("metadata", {})
+            type_dec = meta.get("type_decision", "")
+            ecli = meta.get("ecli", "")
+            line = f"- {title}"
+            if type_dec:
+                line += f" ({type_dec})"
+            if ecli and ecli != "undefined":
+                line += f" ECLI: {ecli}"
+            lines.append(line)
+        return f"{len(lines)}/{total} decision(s) admin pour '{query}':\n" + "\n".join(lines)
+
+
+@mcp.tool()
+async def veille_juridique() -> str:
+    """Verifie les derniers textes ENR dans le Journal Officiel (JORF).
+
+    UTILISER pour savoir si de nouveaux textes reglementaires sont parus
+    concernant le photovoltaique, les marches publics, les IRVE, etc.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{AGEA_API_URL}/api/lexia/veille",
+            headers=_headers(),
+        )
+        if resp.status_code != 200:
+            return f"Erreur API LEXIA: {resp.status_code}"
+        data = resp.json()
+        if data.get("error"):
+            return f"LEXIA desactive: {data['error']}"
+        results = data.get("results", [])
+        if not results:
+            return "Aucun nouveau texte ENR dans le JORF recent."
+        lines = []
+        for r in results[:10]:
+            title = r.get("title", "")
+            keyword = r.get("keyword", "")
+            date = r.get("date", "")
+            lines.append(f"- {title} (mot-cle: {keyword}, date: {date})")
+        return f"{len(lines)} texte(s) ENR recents:\n" + "\n".join(lines)
+
+
 if __name__ == "__main__":
     logger.info("Demarrage MCP Remote Server AGEA sur port 8888")
     mcp.run(transport="streamable-http")
