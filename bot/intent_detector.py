@@ -34,6 +34,11 @@ INTENT_PATTERNS = {
         r"\?$",
         r"^(dis.moi|rappelle.moi|c['\u2019]est quoi|on a quoi sur)",
         r"^(r[eé]sume|r[eé]cap|r[eé]sum[eé])",
+        r"^(donne.moi|montre.moi|affiche.moi|liste.moi|fais.moi)",
+        r"^(cherche|trouve|recherche|retrouve)\b",
+        r"^(liste|affiche|montre|donne)\b.+(dernier|derniere|derniers|dernieres|r[eé]cent)",
+        r"^liste[rz]?\b.+(les|mes|nos|tous|tout)",
+        r"^(qu['\u2019]en est.il|o[uù] en est|point sur|[eé]tat de)",
     ],
     "correction": [
         r"(finalement|en fait|correction|rectification|erreur)",
