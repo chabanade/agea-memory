@@ -174,7 +174,7 @@ def format_response(intent: str, tag: str | None, text: str, vocal: bool = False
 
 
 def tag_content(text: str, tag: str | None) -> str:
-    """Prefixe le contenu avec le tag metier pour Zep/Graphiti."""
+    """Prefixe le contenu avec le tag metier pour Graphiti."""
     if tag:
         return f"[{tag.upper()}] {text}"
     return text

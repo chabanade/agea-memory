@@ -1,7 +1,7 @@
 """
 ConversationStore - Stockage PostgreSQL pour l'historique conversationnel
 =========================================================================
-Remplace ZepClient apres la migration Zep -> Graphiti Standalone.
+Stockage historique PostgreSQL (anciennement ZepClient, migre vers Graphiti).
 Stocke les messages dans une table `conversations` (PostgreSQL).
 La recherche semantique est deleguee a Graphiti (Neo4j).
 """
@@ -20,7 +20,7 @@ POSTGRES_DSN = os.getenv(
 
 
 class ConversationStore:
-    """Remplace ZepClient — stockage historique dans PostgreSQL."""
+    """Stockage historique dans PostgreSQL (remplace l'ancien ZepClient)."""
 
     def __init__(self):
         self._pool = None
@@ -99,7 +99,7 @@ class ConversationStore:
     ) -> Optional[dict]:
         """
         Recupere les N derniers messages d'une session.
-        Format de retour compatible avec l'ancien ZepClient :
+        Format de retour :
         {"messages": [{"role": "...", "content": "...", "created_at": "..."}]}
         """
         if not self._pool:

@@ -64,7 +64,7 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS}
-      ZEP_SECRET_KEY: ${ZEP_SECRET_KEY}  # Retrocompat: utilise comme AGEA_API_TOKEN
+      AGEA_API_TOKEN: ${AGEA_API_TOKEN}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -114,7 +114,7 @@ services:
         condition: service_healthy
     environment:
       AGEA_API_URL: http://bot:8000
-      AGEA_API_TOKEN: ${ZEP_SECRET_KEY}
+      AGEA_API_TOKEN: ${AGEA_API_TOKEN}
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',8888),2); s.close()"]
       interval: 30s

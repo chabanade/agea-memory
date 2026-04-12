@@ -34,7 +34,7 @@ from lexia import (
 # --- Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_ALLOWED_USERS = os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
-AGEA_API_TOKEN = os.getenv("ZEP_SECRET_KEY", os.getenv("AGEA_API_TOKEN", ""))
+AGEA_API_TOKEN = os.getenv("AGEA_API_TOKEN", "")
 TELEGRAM_MODE = os.getenv("TELEGRAM_MODE", "polling")  # "polling" ou "webhook"
 MEHDI_CHAT_ID = os.getenv("MEHDI_CHAT_ID", "")  # Chat ID Telegram de Mehdi (Phase 6D/6E)
 FEATURE_REASONING = os.getenv("FEATURE_REASONING", "true").lower() == "true"  # Phase 7
@@ -333,7 +333,7 @@ async def api_post_memo(
             "content": req.content[:100],
         }
 
-    # Sauvegarder dans la conversation (Zep)
+    # Sauvegarder dans la conversation (PostgreSQL)
     ok = await conversations.add_memory(req.content, role=req.role, session_id=req.session_id)
 
     # Queue Graphiti async

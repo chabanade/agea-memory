@@ -28,7 +28,7 @@ logger = logging.getLogger("migrate")
 
 # Configuration
 AGEA_URL = os.getenv("AGEA_API_URL", "https://srv987452.hstgr.cloud")
-AGEA_TOKEN = os.getenv("AGEA_API_TOKEN", os.getenv("ZEP_SECRET_KEY", ""))
+AGEA_TOKEN = os.getenv("AGEA_API_TOKEN", "")
 POSTGRES_DSN = os.getenv(
     "POSTGRES_DSN",
     "postgresql://agea:password@localhost:5432/agea_memory",

@@ -18,7 +18,7 @@ from graphiti_client import QuotaExhaustedError
 
 logger = logging.getLogger("agea.graphiti.worker")
 
-# Connection PostgreSQL directe via Zep's postgres
+# Connection PostgreSQL directe
 POSTGRES_DSN = os.getenv(
     "POSTGRES_DSN",
     "postgresql://agea:password@postgres:5432/agea_memory",

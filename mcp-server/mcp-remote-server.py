@@ -48,7 +48,7 @@ def _headers() -> dict:
 
 @mcp.tool()
 async def search_memory(query: str, limit: int = 5) -> str:
-    """Cherche dans la memoire AGEA/Zep par recherche semantique.
+    """Cherche dans la memoire AGEA par recherche semantique.
 
     COMPLEMENT de search_facts. Utiliser UNIQUEMENT si search_facts
     ne retourne rien de pertinent. Ne contient PAS les corrections
