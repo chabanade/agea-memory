@@ -228,5 +228,36 @@ async def search_decisions(query: str, limit: int = 5) -> str:
         return f"{len(lines)} d\u00e9cision(s) pour '{query}':\n" + "\n".join(lines)
 
 
+@mcp.tool()
+async def lexia_alert(subject: str, level: str = "CRITIQUE", details: str = "", deadline: str = "") -> str:
+    """Envoie une alerte Telegram URGENTE a Mehdi quand une analyse LEXIA
+    detecte un risque critique ou une action immediate necessaire.
+
+    UTILISER quand :
+    - Risque CRITIQUE detecte (nullite, sanction penale, perte financiere majeure)
+    - Delai de prescription court
+    - Mise en demeure recue
+    - Controle fiscal/URSSAF en cours
+
+    Args:
+        subject: Description courte du probleme
+        level: Niveau : CRITIQUE, URGENT ou IMPORTANT (defaut: CRITIQUE)
+        details: Details supplementaires
+        deadline: Date limite d'action si applicable
+    """
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{AGEA_URL}/api/lexia/alert",
+            json={"subject": subject, "level": level, "details": details, "deadline": deadline},
+            headers=_headers(),
+        )
+        if resp.status_code != 200:
+            return f"Erreur envoi alerte: {resp.status_code} - {resp.text}"
+        data = resp.json()
+        if data.get("ok"):
+            return f"Alerte Telegram envoyee a Mehdi: [{level}] {subject}"
+        return f"Echec envoi alerte: {json.dumps(data)}"
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

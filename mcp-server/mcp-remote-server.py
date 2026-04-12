@@ -406,6 +406,37 @@ async def veille_juridique() -> str:
         return f"{len(lines)} texte(s) ENR recents:\n" + "\n".join(lines)
 
 
+@mcp.tool()
+async def lexia_alert(subject: str, level: str = "CRITIQUE", details: str = "", deadline: str = "") -> str:
+    """Envoie une alerte Telegram URGENTE a Mehdi quand une analyse LEXIA
+    detecte un risque critique ou une action immediate necessaire.
+
+    UTILISER quand :
+    - Risque CRITIQUE detecte (nullite, sanction penale, perte financiere majeure)
+    - Delai de prescription court (action dans les jours/semaines)
+    - Mise en demeure recue necessitant reponse rapide
+    - Controle fiscal/URSSAF en cours
+
+    Args:
+        subject: Description courte du probleme (ex: "Mise en demeure client Dupont - repondre sous 15j")
+        level: Niveau d'urgence : CRITIQUE, URGENT ou IMPORTANT (defaut: CRITIQUE)
+        details: Details supplementaires (analyse, articles concernes, montant)
+        deadline: Date limite d'action si applicable (ex: "27/04/2026")
+    """
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"{AGEA_API_URL}/api/lexia/alert",
+            json={"subject": subject, "level": level, "details": details, "deadline": deadline},
+            headers=_headers(),
+        )
+        if resp.status_code != 200:
+            return f"Erreur envoi alerte: {resp.status_code} - {resp.text}"
+        data = resp.json()
+        if data.get("ok"):
+            return f"Alerte Telegram envoyee a Mehdi: [{level}] {subject}"
+        return f"Echec envoi alerte: {json.dumps(data)}"
+
+
 if __name__ == "__main__":
     logger.info("Demarrage MCP Remote Server AGEA sur port 8888")
     mcp.run(transport="streamable-http")

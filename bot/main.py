@@ -24,6 +24,7 @@ from voice_handler import VoiceHandler
 from intent_detector import detect_intent, detect_business_tag, format_response, tag_content
 from daily_summary import DailySummary
 from proactive import ProactiveAgent
+from veille_juridique import VeilleJuridique
 from reasoning_formatter import format_reasoning, format_reasoning_response
 from lexia import (
     LexiaClient, format_legifrance_results,
@@ -106,6 +107,10 @@ async def lifespan(app: FastAPI):
         proactive = ProactiveAgent(MEHDI_CHAT_ID, send_telegram, graphiti)
         proactive_task = asyncio.create_task(proactive.run())
         logger.info("Cron relances proactives lance")
+
+        veille = VeilleJuridique(MEHDI_CHAT_ID, send_telegram, lexia_client)
+        veille_task = asyncio.create_task(veille.run())
+        logger.info("Cron veille juridique hebdomadaire lance")
     else:
         logger.info("MEHDI_CHAT_ID non configure — crons 6D/6E desactives")
 
@@ -1586,6 +1591,50 @@ async def api_lexia_veille(authorization: str = Header(default="")):
         return {"error": "LEXIA desactive"}
     results = await lexia_client.check_veille()
     return {"results": results, "count": len(results)}
+
+
+class LexiaAlertRequest(BaseModel):
+    """Corps de requete pour une alerte LEXIA urgente."""
+    subject: str
+    level: str = "CRITIQUE"  # CRITIQUE, URGENT, IMPORTANT
+    details: str = ""
+    deadline: str = ""
+
+
+@app.post("/api/lexia/alert", tags=["lexia"], operation_id="lexiaAlert",
+          summary="Envoyer une alerte juridique urgente via Telegram")
+async def api_lexia_alert(
+    req: LexiaAlertRequest,
+    authorization: str = Header(default=""),
+):
+    """Envoie une alerte Telegram a Mehdi quand LEXIA detecte un risque critique."""
+    await verify_bearer(authorization)
+
+    if not MEHDI_CHAT_ID:
+        return {"ok": False, "error": "MEHDI_CHAT_ID non configure"}
+
+    emoji = {"CRITIQUE": "\U0001f6a8", "URGENT": "\u26a0\ufe0f", "IMPORTANT": "\u2757"}.get(
+        req.level, "\u2757"
+    )
+
+    message = (
+        f"{emoji} <b>ALERTE LEXIA — {req.level}</b>\n"
+        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        f"\U0001f4cb <b>Sujet :</b> {req.subject}\n"
+    )
+    if req.details:
+        message += f"\n{req.details}\n"
+    if req.deadline:
+        message += f"\n\u23f0 <b>Deadline :</b> {req.deadline}\n"
+    message += (
+        f"\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        f"\U0001f4ac Tape /loi ou /jurisprudence pour approfondir"
+    )
+
+    await send_telegram(MEHDI_CHAT_ID, message)
+    logger.info("Alerte LEXIA envoyee: [%s] %s", req.level, req.subject[:60])
+
+    return {"ok": True, "level": req.level, "subject": req.subject}
 
 
 @app.get("/api/lexia/admin", tags=["lexia"], operation_id="lexiaAdmin")
