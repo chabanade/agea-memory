@@ -38,6 +38,7 @@ services:
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
+      - neo4j_backups:/backups
     deploy:
       resources:
         limits:
@@ -147,6 +148,7 @@ volumes:
   postgres_data:
   neo4j_data:
   neo4j_logs:
+  neo4j_backups:
   caddy_data:
   caddy_config:
 
