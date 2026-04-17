@@ -184,20 +184,25 @@ class LexiaClient:
         payload = {
             "recherche": {
                 "champs": [
-                    {"typeChamp": "ALL", "criteres": [
-                        {"typeRecherche": "EXACTE", "valeur": query}
-                    ]}
+                    {
+                        "typeChamp": "ALL",
+                        "criteres": [
+                            {"typeRecherche": "UN_DES_MOTS", "valeur": query, "operateur": "ET"}
+                        ],
+                        "operateur": "ET",
+                    }
                 ],
+                "filtres": (
+                    [{"facette": "NOM_CODE", "valeurs": [code_name]}] if code_name else []
+                ),
                 "pageNumber": 1,
                 "pageSize": 10,
+                "operateur": "ET",
                 "sort": "PERTINENCE",
+                "typePagination": "DEFAUT",
             },
             "fond": "CODE_DATE",
         }
-        if code_name:
-            payload["recherche"]["filtres"] = [
-                {"facette": "NOM_CODE", "valeurs": [code_name]}
-            ]
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
@@ -207,8 +212,15 @@ class LexiaClient:
                     json=payload,
                 )
                 if resp.status_code != 200:
-                    logger.error("Legifrance search %d: %s", resp.status_code, resp.text[:300])
-                    return []
+                    error_msg = f"Legifrance API HTTP {resp.status_code}: {resp.text[:300]}"
+                    logger.error(error_msg)
+                    return [{
+                        "source": "error",
+                        "article_id": "error",
+                        "title": error_msg,
+                        "content": "",
+                        "metadata": {"code": code_name, "error": True},
+                    }]
 
                 data = resp.json()
                 results = []
@@ -234,8 +246,15 @@ class LexiaClient:
                 return results
 
         except Exception as e:
-            logger.error("Legifrance search exception: %s", e)
-            return []
+            error_msg = f"Legifrance search exception: {e}"
+            logger.error(error_msg)
+            return [{
+                "source": "error",
+                "article_id": "error",
+                "title": error_msg,
+                "content": "",
+                "metadata": {"code": code_name, "error": True},
+            }]
 
     async def get_article(self, article_id: str) -> Optional[dict]:
         """Recupere un article complet par son ID Legifrance."""
@@ -412,13 +431,20 @@ class LexiaClient:
                     payload = {
                         "recherche": {
                             "champs": [
-                                {"typeChamp": "ALL", "criteres": [
-                                    {"typeRecherche": "EXACTE", "valeur": keyword}
-                                ]}
+                                {
+                                    "typeChamp": "ALL",
+                                    "criteres": [
+                                        {"typeRecherche": "UN_DES_MOTS", "valeur": keyword, "operateur": "ET"}
+                                    ],
+                                    "operateur": "ET",
+                                }
                             ],
+                            "filtres": [],
                             "pageNumber": 1,
                             "pageSize": 3,
+                            "operateur": "ET",
                             "sort": "DATE_DESC",
+                            "typePagination": "DEFAUT",
                         },
                         "fond": "JORF",
                     }
