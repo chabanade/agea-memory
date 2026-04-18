@@ -612,13 +612,28 @@ check_invoiceninja() {
 }
 
 check_backups() {
-    local latest
-    latest=$(find "$AGEA_DIR/backups/" -name "*neo4j*.gz" -mtime -2 2>/dev/null | head -1)
+    # Cherche un backup Neo4j < 48h ET taille > 1 Mo (un tar corrompu fait souvent < 1 Ko).
+    local latest size
+    latest=$(find "$AGEA_DIR/backups/" -name "*neo4j*.tar.gz" -mtime -2 -size +1M 2>/dev/null | head -1)
     if [ -n "$latest" ]; then
+        size=$(du -h "$latest" 2>/dev/null | cut -f1)
+        log "Backup Neo4j recent OK: $(basename "$latest") ($size)"
         clear_alert "backup_neo4j"
+        # Verif age : si >36h, on warn en log (proche du seuil) mais pas d'alerte
+        local age_h
+        age_h=$(( ( $(date +%s) - $(stat -c %Y "$latest") ) / 3600 ))
+        [ "$age_h" -gt 30 ] && log "WARN backup Neo4j age ${age_h}h (approche seuil 48h)"
         return 0
     fi
-    ALERTS_PENDING+=("backup_neo4j::Aucun backup Neo4j récent (< 48h) — vérifier cron 4h du matin")
+    # Diagnostic plus precis : est-ce qu'il existe au moins un fichier <48h mais trop petit ?
+    local latest_any
+    latest_any=$(find "$AGEA_DIR/backups/" -name "*neo4j*.tar.gz" -mtime -2 2>/dev/null | head -1)
+    if [ -n "$latest_any" ]; then
+        size=$(du -h "$latest_any" 2>/dev/null | cut -f1)
+        ALERTS_PENDING+=("backup_neo4j::Backup Neo4j de moins de 48h trouve mais TROP PETIT ($size, seuil 1Mo) — corruption probable. Fichier: $(basename "$latest_any"). Verifier /var/log/agea-backup-neo4j.log et faire un backup manuel immediat.")
+    else
+        ALERTS_PENDING+=("backup_neo4j::Aucun backup Neo4j < 48h. Cron 4h UTC a-t-il tourne ? Faire backup manuel immediat via /opt/agea/scripts/backup-neo4j.sh")
+    fi
     return 1
 }
 
