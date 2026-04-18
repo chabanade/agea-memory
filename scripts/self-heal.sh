@@ -386,3 +386,4 @@ if [ ${#ALERTS_PENDING[@]} -gt 0 ]; then
 fi
 
 log "=== Run end (pending=${#ALERTS_PENDING[@]} recovered=${#RECOVERED[@]}) ==="
+exit 0
