@@ -14,6 +14,8 @@ STATE_DIR="/var/lib/agea-self-heal"
 LOG_FILE="/var/log/agea-self-heal.log"
 STATE_FILE="$STATE_DIR/state.json"
 ALERT_COOLDOWN=21600  # 6h
+REBUILD_COOLDOWN=14400  # 4h - circuit breaker palier 3 (évite boucle rebuild)
+LEXIA_EXTERNAL_PERSIST=6  # runs consécutifs avant d'alerter sur panne PISTE
 HEALTH_URL_EXTERNAL="https://srv987452.hstgr.cloud"
 LOG_PREFIX="[AGEA self-heal]"
 
@@ -131,104 +133,206 @@ check_neo4j() {
     return 1
 }
 
-lexia_test_count() {
+# Retourne skip | ok | external | internal | dead
+# - ok        : LEXIA fonctionne normalement
+# - external  : erreur PISTE/Legifrance (HTTP 5XX cote gouvernement) → PAS de reparation locale
+# - internal  : le bot repond mais retourne une erreur (code, format)
+# - dead      : le bot ne repond pas du tout
+# - skip      : pas de token AGEA_API_TOKEN configure
+lexia_check() {
     local token="${AGEA_API_TOKEN:-}"
     [ -z "$token" ] && { echo "skip"; return; }
-    docker exec docker-bot-1 curl -s --max-time 15 \
+
+    local response
+    response=$(docker exec docker-bot-1 curl -s --max-time 15 \
         -H "Authorization: Bearer $token" \
-        'http://localhost:8000/api/lexia/search?q=photovoltaique' 2>/dev/null \
-        | jq -r '.count // "err"' 2>/dev/null || echo "err"
+        'http://localhost:8000/api/lexia/search?q=photovoltaique' 2>/dev/null) || {
+        echo "dead"
+        return
+    }
+
+    [ -z "$response" ] && { echo "dead"; return; }
+
+    # Le bot a repondu. Verifier si la reponse signale une erreur externe PISTE.
+    if echo "$response" | jq -e '.results[0].source == "error"' > /dev/null 2>&1; then
+        local errmsg
+        errmsg=$(echo "$response" | jq -r '.results[0].title // ""')
+        if echo "$errmsg" | grep -qiE 'Legifrance API HTTP 5|HTTP 50[234]|timeout|temporairement indisponible'; then
+            echo "external"
+            return
+        fi
+        echo "internal"
+        return
+    fi
+
+    local count
+    count=$(echo "$response" | jq -r '.count // empty' 2>/dev/null)
+    if [ -n "$count" ] && [ "$count" != "null" ]; then
+        echo "ok"
+        return
+    fi
+
+    echo "internal"
 }
 
-check_agea_bot() {
-    local count
-    count=$(lexia_test_count)
+# Verifie uniquement que le bot est vivant (endpoint /health, independant de PISTE)
+bot_health_alive() {
+    docker exec docker-bot-1 curl -sf --max-time 8 http://localhost:8000/health > /dev/null 2>&1
+}
 
-    if [ "$count" = "skip" ]; then
-        log "AGEA_API_TOKEN non defini, skip test fonctionnel LEXIA"
-        if ! container_running "docker-bot-1"; then
-            log "Bot container DOWN, start..."
-            (cd "$AGEA_DIR/docker" && docker compose up -d bot >> "$LOG_FILE" 2>&1)
-            sleep 20
-            if ! container_running "docker-bot-1"; then
-                ALERTS_PENDING+=("bot::Container docker-bot-1 impossible à démarrer")
-                return 1
-            fi
-            log "Bot RECOVERED"
-        fi
+# Circuit breaker: retourne 0 si on peut rebuild (>4h depuis le dernier), 1 sinon.
+rebuild_allowed() {
+    local last now
+    last=$(jq -r '.last_rebuild // 0' "$STATE_FILE" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    [ $((now - last)) -gt "$REBUILD_COOLDOWN" ]
+}
+
+mark_rebuild() {
+    local now tmp
+    now=$(date +%s)
+    tmp=$(mktemp)
+    jq --argjson t "$now" '.last_rebuild = $t' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+}
+
+# Check #1: le bot est-il vivant ? (ne depend PAS de PISTE)
+# Si KO, enchaine paliers 1/2/3 en ciblant UNIQUEMENT le service bot (--no-deps).
+check_bot_liveness() {
+    if ! container_running "docker-bot-1"; then
+        log "Bot container DOWN, start..."
+        (cd "$AGEA_DIR/docker" && docker compose up -d --no-deps bot >> "$LOG_FILE" 2>&1)
+        sleep 20
+    fi
+
+    if bot_health_alive; then
         clear_alert "bot"
         return 0
     fi
 
-    if [ "$count" != "0" ] && [ "$count" != "err" ] && [ -n "$count" ]; then
-        clear_alert "bot"
-        return 0
-    fi
-
-    # Palier 1: restart
-    log "LEXIA not functional (count=$count), palier 1: restart bot..."
+    log "Bot /health KO, palier 1: restart bot..."
     (cd "$AGEA_DIR/docker" && docker compose restart bot >> "$LOG_FILE" 2>&1)
     sleep 25
-    count=$(lexia_test_count)
-    if [ "$count" != "0" ] && [ "$count" != "err" ] && [ -n "$count" ]; then
-        log "LEXIA RECOVERED after restart"
+    if bot_health_alive; then
+        log "Bot RECOVERED after restart"
         clear_alert "bot"
         return 0
     fi
 
-    # Palier 2: force-recreate
-    log "Palier 2: force-recreate bot..."
-    (cd "$AGEA_DIR/docker" && docker compose up -d --force-recreate bot >> "$LOG_FILE" 2>&1)
+    log "Palier 2: force-recreate bot (--no-deps, ne touche pas mcp-remote/neo4j)..."
+    (cd "$AGEA_DIR/docker" && docker compose up -d --no-deps --force-recreate bot >> "$LOG_FILE" 2>&1)
     sleep 35
-    count=$(lexia_test_count)
-    if [ "$count" != "0" ] && [ "$count" != "err" ] && [ -n "$count" ]; then
-        log "LEXIA RECOVERED after force-recreate"
+    if bot_health_alive; then
+        log "Bot RECOVERED after force-recreate"
         clear_alert "bot"
         return 0
     fi
 
-    # Palier 3: git pull + rebuild
-    log "Palier 3: git pull + rebuild bot..."
-    (cd "$AGEA_DIR" && git fetch origin main >> "$LOG_FILE" 2>&1 && git reset --hard origin/main >> "$LOG_FILE" 2>&1)
-    (cd "$AGEA_DIR/docker" && docker compose build bot >> "$LOG_FILE" 2>&1 && docker compose up -d bot >> "$LOG_FILE" 2>&1)
+    if ! rebuild_allowed; then
+        log "Palier 3 SKIP: rebuild effectue il y a moins de 4h (circuit breaker)"
+        ALERTS_PENDING+=("bot::Bot AGEA KO apres restart+recreate ; rebuild skippe (circuit breaker 4h). Intervention manuelle requise.")
+        return 1
+    fi
+
+    log "Palier 3: git pull + rebuild bot (--no-deps)..."
+    if (cd "$AGEA_DIR" && git fetch origin main >> "$LOG_FILE" 2>&1); then
+        local dirty
+        dirty=$(cd "$AGEA_DIR" && git status --porcelain | wc -l)
+        if [ "$dirty" -eq 0 ]; then
+            (cd "$AGEA_DIR" && git reset --hard origin/main >> "$LOG_FILE" 2>&1)
+        else
+            log "Palier 3: git dirty ($dirty fichiers), SKIP reset --hard"
+        fi
+    fi
+    (cd "$AGEA_DIR/docker" && docker compose build bot >> "$LOG_FILE" 2>&1 && docker compose up -d --no-deps bot >> "$LOG_FILE" 2>&1)
+    mark_rebuild
     sleep 45
-    count=$(lexia_test_count)
-    if [ "$count" != "0" ] && [ "$count" != "err" ] && [ -n "$count" ]; then
-        log "LEXIA RECOVERED after rebuild"
+    if bot_health_alive; then
+        log "Bot RECOVERED after rebuild"
         clear_alert "bot"
         return 0
     fi
 
-    log "LEXIA STILL BROKEN after 3 paliers (count=$count)"
-    ALERTS_PENDING+=("bot::AGEA/LEXIA en panne, auto-réparation échouée (restart+recreate+rebuild). Intervention manuelle requise.")
+    log "Bot STILL DEAD after 3 paliers"
+    ALERTS_PENDING+=("bot::AGEA bot KO, auto-reparation echouee (restart+recreate+rebuild). Intervention manuelle requise.")
     return 1
 }
 
-check_mcp_remote() {
-    if container_running "docker-mcp-remote-1"; then
-        local status
-        status=$(docker inspect -f '{{.State.Health.Status}}' docker-mcp-remote-1 2>/dev/null || echo "none")
-        if [ "$status" = "unhealthy" ]; then
-            log "mcp-remote unhealthy, restart..."
-            (cd "$AGEA_DIR/docker" && docker compose restart mcp-remote >> "$LOG_FILE" 2>&1)
-            sleep 25
-            status=$(docker inspect -f '{{.State.Health.Status}}' docker-mcp-remote-1 2>/dev/null || echo "none")
-            if [ "$status" = "unhealthy" ]; then
-                ALERTS_PENDING+=("mcp::docker-mcp-remote-1 unhealthy après restart")
-                return 1
+# Check #2: LEXIA est-il fonctionnel ? (depend de PISTE)
+# Distingue panne externe (PISTE gouvernement) vs panne interne.
+# Ne declenche AUCUN redemarrage sur une panne externe — attente du retablissement DILA.
+check_lexia_functional() {
+    local kind
+    kind=$(lexia_check)
+
+    case "$kind" in
+        skip)
+            log "AGEA_API_TOKEN non defini, skip test fonctionnel LEXIA"
+            return 0
+            ;;
+        ok)
+            clear_alert "lexia_external"
+            local tmp
+            tmp=$(mktemp)
+            jq '.lexia_external_fails = 0' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+            return 0
+            ;;
+        external)
+            local fails tmp
+            fails=$(jq -r '.lexia_external_fails // 0' "$STATE_FILE" 2>/dev/null || echo 0)
+            fails=$((fails + 1))
+            tmp=$(mktemp)
+            jq --argjson f "$fails" '.lexia_external_fails = $f' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+            log "LEXIA external error (PISTE/Legifrance HTTP 5XX), fails=$fails, pas de reparation locale"
+            if [ "$fails" -ge "$LEXIA_EXTERNAL_PERSIST" ]; then
+                ALERTS_PENDING+=("lexia_external::API Legifrance/PISTE en panne depuis 3h+ cote gouvernement. Rien a faire cote AGEA, attendre retablissement DILA.")
             fi
+            return 0
+            ;;
+        internal|dead)
+            log "LEXIA $kind (probleme bot local) — check_bot_liveness doit s'en charger"
+            return 1
+            ;;
+    esac
+}
+
+# Test protocole MCP reel (JSON-RPC tools/list) — pas juste le container.
+# Verifie que les clients (Claude Desktop, VSCode) pourront vraiment communiquer.
+mcp_protocol_alive() {
+    local code
+    code=$(docker exec docker-bot-1 curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+        -X POST http://mcp-remote:8888/mcp \
+        -H 'Content-Type: application/json' \
+        -H 'Accept: application/json, text/event-stream' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null || echo 000)
+    [ "$code" = "200" ]
+}
+
+check_mcp_deep() {
+    if ! container_running "docker-mcp-remote-1"; then
+        log "mcp-remote container DOWN, start..."
+        (cd "$AGEA_DIR/docker" && docker compose up -d --no-deps mcp-remote >> "$LOG_FILE" 2>&1)
+        sleep 20
+        if ! container_running "docker-mcp-remote-1"; then
+            ALERTS_PENDING+=("mcp::docker-mcp-remote-1 impossible a demarrer")
+            return 1
         fi
+    fi
+
+    if mcp_protocol_alive; then
         clear_alert "mcp"
         return 0
     fi
-    log "mcp-remote DOWN, start..."
-    (cd "$AGEA_DIR/docker" && docker compose up -d mcp-remote >> "$LOG_FILE" 2>&1)
-    sleep 20
-    if container_running "docker-mcp-remote-1"; then
+
+    log "mcp-remote ne repond pas au protocole MCP (JSON-RPC), restart..."
+    (cd "$AGEA_DIR/docker" && docker compose restart mcp-remote >> "$LOG_FILE" 2>&1)
+    sleep 25
+    if mcp_protocol_alive; then
+        log "mcp-remote RECOVERED (protocole)"
         clear_alert "mcp"
         return 0
     fi
-    ALERTS_PENDING+=("mcp::docker-mcp-remote-1 impossible à démarrer")
+
+    ALERTS_PENDING+=("mcp::docker-mcp-remote-1 ne repond pas au protocole JSON-RPC apres restart. Sessions MCP clients probablement cassees.")
     return 1
 }
 
@@ -335,8 +439,9 @@ log "=== Run start ==="
 
 check_postgres || true
 check_neo4j || true
-check_agea_bot || true
-check_mcp_remote || true
+check_bot_liveness || true
+check_lexia_functional || true
+check_mcp_deep || true
 check_caddy || true
 check_n8n || true
 check_invoiceninja || true
