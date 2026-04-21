@@ -243,6 +243,14 @@ async def rs_discovery() -> JSONResponse:
     return JSONResponse(_rs_metadata())
 
 
+# Alias OIDC pour clients hybrides (Anthropic MCP) qui exigent ce path
+# avant de fallback sur oauth-authorization-server. Retourne le metadata AS.
+@app.get("/.well-known/openid-configuration")
+@app.get("/mcp-oauth/.well-known/openid-configuration")
+async def oidc_discovery() -> JSONResponse:
+    return JSONResponse(_as_metadata())
+
+
 # -------------------------------------------------------------------
 # Dynamic Client Registration (RFC 7591)
 # -------------------------------------------------------------------
