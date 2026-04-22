@@ -1,0 +1,9 @@
+{
+  "_doc": "Alias map exact-match post-extraction Graphiti. Run hebdo via cron VPS.",
+  "_version": "1.0",
+  "_last_modified": "2026-04-23",
+  "group_id": "mehdi-agea",
+  "aliases": {
+    "backup.sh": "backup-neo4j.sh"
+  }
+}
