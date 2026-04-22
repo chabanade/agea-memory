@@ -25,9 +25,9 @@ Livrer le méta-bloquant pour upgrade verdict audit mémoire AGEA : exposer le p
 
 | SHA | Message | Scope |
 |---|---|---|
-| `a5eaa4c` (VPS) | chantier #2: expose include_invalidated on search_facts/get_entity (3-layer) | 3 fichiers code |
-| `5dbacbf` (VPS) | chore: archive agea-bridge.py (dead since Zep->AGEA migration 2026-04-12) | 2 git mv |
-| `<pending local>` | fix(oauth-proxy): add openid-configuration alias for Anthropic MCP hybrid clients | 1 fichier code |
+| `c222c84` (ex-`a5eaa4c` VPS, ré-identifié PRIO 7 v2.6) | chantier #2: expose include_invalidated on search_facts/get_entity (3-layer) | 3 fichiers code |
+| `e92404b` (ex-`5dbacbf` VPS, ré-identifié PRIO 7 v2.6) | chore: archive agea-bridge.py (dead since Zep->AGEA migration 2026-04-12) | 2 git mv |
+| `bed406f` | fix(oauth-proxy): add openid-configuration alias for Anthropic MCP hybrid clients | 1 fichier code |
 
 Discipline `git commit --only` respectée : oauth-proxy WIP (Phase 18) resté intact dans staging area pré/post-run (preuve : diff `git status --short` `$BACKUP_DIR/git-status.before` ↔ `.after-commit-*`).
 
@@ -132,9 +132,9 @@ Extraction Graphiti post-run propre (vérifiée par search_facts en T3-B) : rela
 
 | PRIO | Sujet | Complexité | À planifier |
 |---|---|---|---|
-| 3 | `chown -R 7474:7474` dans `/usr/local/bin/backup-neo4j.sh` + plan test dry-run | 15-20 min | 2026-04-22 |
+| 3 | ~~chown 7474:7474 backup-neo4j.sh~~ ❌ **ARCHIVÉE OBSOLÈTE 21/04 v2.5** — architecture v3 du 18/04 (docker volume `:ro`) ne nécessite aucun chown host | — | — |
 | 6 | Bug extraction LLM Graphiti (`STOPS relates to mcp-remote` anomalies T3-A) | 1-2h investigation | libre |
-| 7 | Sync git VPS ↔ repo local `c:/Users/Abyss/Dev/agea` (commits a5eaa4c + 5dbacbf pas dans repo local) | 15 min | libre |
+| 7 | ~~Sync git VPS↔local~~ ✅ **FAIT 22/04** — `c222c84` + `e92404b` ré-identifiés Tesla Electric, mapping note dans `$BACKUP_DIR/PRIO7-SYNC-CORRECTION-20260422.md` | — | — |
 
 ## 9. Métriques du run
 
@@ -144,7 +144,7 @@ Extraction Graphiti post-run propre (vérifiée par search_facts en T3-B) : rela
 | Durée chantier #2 pur | 42 s (script one-shot) |
 | Durée incident OAuth | 55 min |
 | Fichiers code touchés | 4 (dont 1 bonus OIDC) |
-| Commits git | 3 (2 sur VPS, 1 pending local) |
+| Commits git | 3 (tous livrés sur origin après PRIO 7 sync 22/04) |
 | Faits save_memory | 5 |
 | Tokens Claude Code consommés | ~280k (estimation) |
 | Interruption service MCP utilisateur | 55 min (window OAuth incident) |
@@ -159,9 +159,9 @@ Le verdict global audit mémoire AGEA passe de **ORANGE CONDITIONNEL** (bloquant
 Run reproductible via :
 - Patch : `patches/chantier2-include-invalidated-20260421.patch`
 - Script : `scripts/apply-chantier2-20260421.sh`
-- Rollback : `git revert <SHA_ARCHIVE> <SHA_CHANTIER2>` (SHAs dans `$BACKUP_DIR/commit-*.sha`)
+- Rollback : `git revert <SHA_ARCHIVE> <SHA_CHANTIER2>` (SHAs originaux dans `$BACKUP_DIR/commit-*.sha` ; mapping ré-identité PRIO 7 dans `$BACKUP_DIR/PRIO7-SYNC-CORRECTION-20260422.md`)
 - Brief OAuth : `brain/BRIEF_OAUTH_AGEA.md`
 
 ---
 
-**Next session** : Bloc 2 — PRIO 3 chown self-heal.sh (15-20 min, fenêtre libre).
+**Next session** : PRIO 4 — revue manuelle actions (I)–(III) hallucinations (60-90 min, avec CSV `/var/backups/agea-hallucination-scan-20260420T224903Z.csv` sous les yeux).
