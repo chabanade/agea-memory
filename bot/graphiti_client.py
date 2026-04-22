@@ -277,11 +277,14 @@ class GraphitiClient:
         query: str,
         num_results: int = 5,
         group_id: str = GRAPHITI_GROUP_ID,
+        include_invalidated: bool = False,
     ) -> list[dict]:
         """
         Recherche hybride dans le knowledge graph.
         0 appels LLM (seulement 1 embedding) = sub-second.
-        Filtre automatiquement les faits invalides (invalid_at non null).
+        Par defaut filtre les faits invalides (invalid_at non null).
+        Passer include_invalidated=True pour inclure l'historique bi-temporel
+        (edges corriges/remplaces, avec leur date d'invalidation).
         """
         if not self._available and self.enabled:
             await self.health_check()
@@ -290,8 +293,8 @@ class GraphitiClient:
             return []
 
         try:
-            # Demander plus de resultats pour compenser le filtrage
-            fetch_count = num_results + 5
+            # Sur-fetch seulement si on filtre (pour compenser les invalides ecartes)
+            fetch_count = num_results if include_invalidated else num_results + 5
             results = await self._graphiti.search(
                 query=query,
                 num_results=fetch_count,
@@ -301,8 +304,8 @@ class GraphitiClient:
             facts = []
             skipped = 0
             for edge in results:
-                # Filtrer les faits invalides (corriges/remplaces)
-                if edge.invalid_at is not None:
+                # Filtrer les faits invalides (corriges/remplaces) SAUF si include_invalidated=True
+                if edge.invalid_at is not None and not include_invalidated:
                     skipped += 1
                     continue
 
@@ -313,7 +316,7 @@ class GraphitiClient:
                     "source_node_uuid": edge.source_node_uuid,
                     "target_node_uuid": edge.target_node_uuid,
                     "valid_at": edge.valid_at.isoformat() if edge.valid_at else None,
-                    "invalid_at": None,
+                    "invalid_at": edge.invalid_at.isoformat() if edge.invalid_at else None,
                     "created_at": edge.created_at.isoformat() if edge.created_at else None,
                     "episodes": edge.episodes if hasattr(edge, "episodes") else [],
                 })
@@ -337,10 +340,12 @@ class GraphitiClient:
         self,
         entity_name: str,
         group_id: str = GRAPHITI_GROUP_ID,
+        include_invalidated: bool = False,
     ) -> Optional[dict]:
         """
         Recupere les faits lies a une entite specifique.
-        Filtre les faits invalides (invalid_at non null).
+        Par defaut filtre les faits invalides (invalid_at non null).
+        Passer include_invalidated=True pour inclure l'historique bi-temporel.
         """
         if not self._available and self.enabled:
             await self.health_check()
@@ -362,8 +367,8 @@ class GraphitiClient:
             related_facts = []
             name_lower = entity_name.lower()
             for edge in results:
-                # Exclure les faits invalides (corriges/remplaces)
-                if edge.invalid_at is not None:
+                # Exclure les faits invalides (corriges/remplaces) SAUF si include_invalidated=True
+                if edge.invalid_at is not None and not include_invalidated:
                     continue
                 fact_lower = (edge.fact or "").lower()
                 if name_lower in fact_lower:
@@ -371,7 +376,7 @@ class GraphitiClient:
                         "fact": edge.fact,
                         "name": edge.name,
                         "valid_at": edge.valid_at.isoformat() if edge.valid_at else None,
-                        "invalid_at": None,
+                        "invalid_at": edge.invalid_at.isoformat() if edge.invalid_at else None,
                     })
 
             return {

@@ -108,7 +108,7 @@ async def save_memory(content: str, role: str = "assistant") -> str:
 
 
 @mcp.tool()
-async def search_facts(query: str, limit: int = 5) -> str:
+async def search_facts(query: str, limit: int = 5, include_invalidated: bool = False) -> str:
     """SOURCE DE VERITE pour toute question factuelle (chiffres, specs,
     noms, couleurs, decisions, projets). Donnees verifiees et corrigees.
     TOUJOURS utiliser EN PREMIER pour les questions factuelles.
@@ -117,11 +117,14 @@ async def search_facts(query: str, limit: int = 5) -> str:
     Args:
         query: La question ou le sujet a rechercher
         limit: Nombre max de resultats (defaut: 5)
+        include_invalidated: Si True, inclut les faits historiques invalides
+            (corriges/remplaces). Defaut False. A utiliser pour audit
+            bi-temporel : "Que disait la memoire avant la correction ?"
     """
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(
             f"{AGEA_API_URL}/api/facts",
-            params={"q": query, "limit": limit},
+            params={"q": query, "limit": limit, "include_invalidated": include_invalidated},
             headers=_headers(),
         )
         if resp.status_code != 200:
@@ -135,21 +138,26 @@ async def search_facts(query: str, limit: int = 5) -> str:
         for r in results:
             fact = r.get("fact", "")
             name = r.get("name", "")
+            invalid_at = r.get("invalid_at")
             prefix = f"[{name}] " if name else ""
-            lines.append(f"{prefix}{fact}")
+            suffix = f" [INVALIDÉ le {invalid_at[:10]}]" if invalid_at else ""
+            lines.append(f"{prefix}{fact}{suffix}")
         return f"[{source}] {len(lines)} faits pour '{query}':\n" + "\n".join(lines)
 
 
 @mcp.tool()
-async def get_entity(name: str) -> str:
+async def get_entity(name: str, include_invalidated: bool = False) -> str:
     """Recupere les details et relations d'une entite du knowledge graph.
 
     Args:
         name: Nom de l'entite (ex: "Mehdi", "HEXAGONE ENERGIE", "CNVL")
+        include_invalidated: Si True, inclut les faits historiques invalides
+            (corriges/remplaces). Defaut False.
     """
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
             f"{AGEA_API_URL}/api/entity/{name}",
+            params={"include_invalidated": include_invalidated},
             headers=_headers(),
         )
         if resp.status_code == 200:

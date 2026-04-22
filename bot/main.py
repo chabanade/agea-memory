@@ -394,17 +394,27 @@ class CorrectRequest(BaseModel):
 async def api_get_facts(
     q: str,
     limit: int = 5,
+    include_invalidated: bool = False,
     authorization: str = Header(default=""),
 ):
     """Recherche dans le knowledge graph Graphiti.
-    0 appels LLM (seulement 1 embedding) = sub-second."""
+    0 appels LLM (seulement 1 embedding) = sub-second.
+    include_invalidated=True : inclut l'historique bi-temporel (audit)."""
     await verify_bearer(authorization)
 
     results = []
 
     if graphiti.read_enabled:
-        facts = await graphiti.search(q, num_results=limit)
-        results = [{"fact": f["fact"], "name": f.get("name", "")} for f in facts if f.get("fact")]
+        facts = await graphiti.search(q, num_results=limit, include_invalidated=include_invalidated)
+        results = [
+            {
+                "fact": f["fact"],
+                "name": f.get("name", ""),
+                "valid_at": f.get("valid_at"),
+                "invalid_at": f.get("invalid_at"),
+            }
+            for f in facts if f.get("fact")
+        ]
 
     return {"query": q, "source": "graphiti", "results": results, "count": len(results)}
 
@@ -434,6 +444,7 @@ async def api_post_correct(
          summary="Recuperer les faits lies a une entite")
 async def api_get_entity(
     name: str,
+    include_invalidated: bool = False,
     authorization: str = Header(default=""),
 ):
     """Recupere tous les faits lies a une entite dans le knowledge graph."""
@@ -442,7 +453,7 @@ async def api_get_entity(
     if not graphiti.read_enabled:
         raise HTTPException(status_code=503, detail="Lecture Graphiti non activee")
 
-    entity = await graphiti.get_entity(name)
+    entity = await graphiti.get_entity(name, include_invalidated=include_invalidated)
     return entity or {"entity": name, "facts_count": 0, "facts": []}
 
 
