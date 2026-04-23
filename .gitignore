@@ -30,3 +30,15 @@ node_modules/
 *.pem
 *.key
 secrets/
+
+# Backups rotatifs contexte (regenerables, polluent les diffs)
+sauvegardes-contexte/
+
+# Patches de travail (snapshots locaux pour chantiers, non-mergeables tels quels)
+patches/
+
+# Scripts one-shot dates (rejouables via brain/ si besoin)
+scripts/apply-chantier*-*.sh
+
+# Config claudeignore (machine-specifique)
+.claudeignore

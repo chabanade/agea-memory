@@ -144,6 +144,36 @@ services:
     networks:
       - agea
 
+  # --- OAuth 2.1 proxy devant mcp-remote (Phase 18) ---
+  oauth-proxy:
+    build:
+      context: ../oauth-proxy
+      dockerfile: Dockerfile
+    container_name: docker-oauth-proxy-1
+    restart: unless-stopped
+    depends_on:
+      - mcp-remote
+    environment:
+      OAUTH_ISSUER: ${OAUTH_ISSUER}
+      OAUTH_JWT_SECRET: ${OAUTH_JWT_SECRET}
+      OAUTH_ACCESS_TOKEN_TTL: ${OAUTH_ACCESS_TOKEN_TTL:-3600}
+      OAUTH_REFRESH_TOKEN_TTL: ${OAUTH_REFRESH_TOKEN_TTL:-2592000}
+      OAUTH_AUTH_CODE_TTL: ${OAUTH_AUTH_CODE_TTL:-600}
+      OAUTH_ADMIN_APPROVAL_TOKEN: ${OAUTH_ADMIN_APPROVAL_TOKEN}
+      MCP_INTERNAL_URL: ${MCP_INTERNAL_URL:-http://mcp-remote:8888/mcp}
+      OAUTH_DB_PATH: /data/oauth.db
+      OAUTH_AUDIT_LOG: /data/audit.log
+    volumes:
+      - oauth_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - agea
+
 volumes:
   postgres_data:
   neo4j_data:
@@ -151,6 +181,7 @@ volumes:
   neo4j_backups:
   caddy_data:
   caddy_config:
+  oauth_data:
 
 networks:
   agea:

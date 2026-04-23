@@ -6,6 +6,17 @@
 # ===========================================
 
 {$BOT_DOMAIN:srv987452.hstgr.cloud} {
+	# Phase 18 - OAuth 2.1 proxy (ChatGPT Business)
+	handle /.well-known/oauth-authorization-server {
+		reverse_proxy oauth-proxy:8081
+	}
+	handle /.well-known/oauth-protected-resource {
+		reverse_proxy oauth-proxy:8081
+	}
+	handle /mcp-oauth* {
+		reverse_proxy oauth-proxy:8081
+	}
+
 	# MCP Remote Server -> Streamable HTTP (Claude.ai connector)
 	handle /mcp* {
 		reverse_proxy mcp-remote:8888

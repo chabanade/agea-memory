@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>AGEA - Autorisation d'acces</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif; max-width: 480px; margin: 48px auto; padding: 24px; background: #0f1115; color: #e7e9ee; }
+    .card { background: #171a21; border: 1px solid #262a35; border-radius: 12px; padding: 24px; box-shadow: 0 8px 32px rgba(0,0,0,.3); }
+    h1 { margin: 0 0 16px 0; font-size: 20px; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 16px 0 24px 0; }
+    dt { color: #9aa3b2; }
+    dd { margin: 0; font-weight: 600; }
+    .scope { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #2a3341; font-family: ui-monospace, monospace; font-size: 13px; }
+    form { display: flex; gap: 12px; margin-top: 16px; }
+    button { flex: 1; padding: 10px 16px; border-radius: 8px; border: none; font-size: 15px; cursor: pointer; font-weight: 600; }
+    .deny { background: #2a3341; color: #e7e9ee; }
+    .allow { background: #2e8b57; color: white; }
+    input[type=password] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #262a35; background: #0f1115; color: #e7e9ee; margin-bottom: 12px; box-sizing: border-box; }
+    label { display: block; font-size: 13px; color: #9aa3b2; margin-bottom: 6px; }
+    .warn { font-size: 13px; color: #f0b849; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>AGEA - Autorisation d'acces</h1>
+    <dl>
+      <dt>Application</dt><dd>{{ client_name }}</dd>
+      <dt>client_id</dt><dd><code>{{ client_id }}</code></dd>
+      <dt>Scope demande</dt><dd><span class="scope">{{ scope }}</span></dd>
+      <dt>Redirect URI</dt><dd><code style="word-break:break-all">{{ redirect_uri }}</code></dd>
+    </dl>
+    <p class="warn">Verifie que l'application ci-dessus correspond bien a ce que tu attends avant d'autoriser.</p>
+    <form method="POST" action="/mcp-oauth/authorize">
+      <input type="hidden" name="client_id" value="{{ client_id }}">
+      <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
+      <input type="hidden" name="scope" value="{{ scope }}">
+      <input type="hidden" name="state" value="{{ state }}">
+      <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
+      <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}">
+      <div style="width:100%">
+        <label for="approval_token">Mot de passe admin (Mehdi)</label>
+        <input type="password" id="approval_token" name="approval_token" autocomplete="off" required>
+        <div style="display:flex;gap:12px">
+          <button type="submit" name="decision" value="deny" class="deny">Refuser</button>
+          <button type="submit" name="decision" value="allow" class="allow">Autoriser</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</body>
+</html>
