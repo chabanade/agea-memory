@@ -248,4 +248,112 @@ s, _, b = req(
 print(f"  HTTP {s} (expected 401)")
 require(s == 401, b)
 
-print("\n=== ALL 11 STEPS OK - OAuth 2.1 flow end-to-end validated ===")
+print("\n=== Step 12: scope escalation protection (18bis) ===")
+# Register un client avec scope=read uniquement
+s, _, b = req(
+    "POST",
+    as_meta["registration_endpoint"],
+    {
+        "client_name": "test-client-scope-subset",
+        "redirect_uris": [REDIRECT],
+        "scope": "read",
+        "token_endpoint_auth_method": "none",
+    },
+    headers={"Content-Type": "application/json"},
+)
+require(s == 201, b)
+SUBSET_CLIENT = json.loads(b)["client_id"]
+print(f"  registered client with scope=read: {SUBSET_CLIENT}")
+
+verifier2 = secrets.token_urlsafe(32)
+challenge2 = base64.urlsafe_b64encode(hashlib.sha256(verifier2.encode()).digest()).rstrip(b"=").decode()
+
+# T2: DCR scope=read + /authorize scope=read+write+admin -> 400 invalid_scope
+print("  T2 - GET /authorize?scope=read+write+admin (escalation tentative)")
+q_esc = urllib.parse.urlencode(
+    {
+        "response_type": "code",
+        "client_id": SUBSET_CLIENT,
+        "redirect_uri": REDIRECT,
+        "scope": "read write admin",
+        "state": "t2",
+        "code_challenge": challenge2,
+        "code_challenge_method": "S256",
+    }
+)
+s, _, b = req("GET", f"{BASE}/authorize?{q_esc}")
+print(f"    HTTP {s} (expected 400)")
+require(s == 400, f"T2 escalation should be blocked, got {s}: {b}")
+require(b"invalid_scope" in b, f"T2 missing invalid_scope error: {b}")
+print("  T2 OK: scope escalation blocked at GET /authorize")
+
+# T2bis: meme tentative au POST /authorize (defense in depth)
+print("  T2bis - POST /authorize?scope=read+write+admin direct (bypass GET)")
+s, _, b = req(
+    "POST",
+    f"{BASE}/authorize",
+    {
+        "client_id": SUBSET_CLIENT,
+        "redirect_uri": REDIRECT,
+        "scope": "read write admin",
+        "state": "t2bis",
+        "code_challenge": challenge2,
+        "code_challenge_method": "S256",
+        "decision": "allow",
+        "approval_token": APPR,
+    },
+)
+print(f"    HTTP {s} (expected 400)")
+require(s == 400, f"T2bis defense-in-depth failed, got {s}: {b}")
+print("  T2bis OK: scope escalation blocked at POST /authorize")
+
+# T3: DCR scope=read+write + /authorize scope=read seul -> 200 (subset valide)
+s, _, b = req(
+    "POST",
+    as_meta["registration_endpoint"],
+    {
+        "client_name": "test-client-subset-rw",
+        "redirect_uris": [REDIRECT],
+        "scope": "read write",
+        "token_endpoint_auth_method": "none",
+    },
+    headers={"Content-Type": "application/json"},
+)
+require(s == 201, b)
+SUBSET_RW = json.loads(b)["client_id"]
+print(f"  T3 - registered client scope=read+write: {SUBSET_RW}")
+
+q_rw = urllib.parse.urlencode(
+    {
+        "response_type": "code",
+        "client_id": SUBSET_RW,
+        "redirect_uri": REDIRECT,
+        "scope": "read",
+        "state": "t3",
+        "code_challenge": challenge2,
+        "code_challenge_method": "S256",
+    }
+)
+s, _, b = req("GET", f"{BASE}/authorize?{q_rw}")
+print(f"    HTTP {s} (expected 200)")
+require(s == 200, f"T3 valid subset should pass, got {s}: {b}")
+print("  T3 OK: scope subset (read of read+write) accepted")
+
+# T4: DCR scope=read + /authorize scope vide -> 200 (fallback default 'read')
+q_empty = urllib.parse.urlencode(
+    {
+        "response_type": "code",
+        "client_id": SUBSET_CLIENT,
+        "redirect_uri": REDIRECT,
+        "scope": "",
+        "state": "t4",
+        "code_challenge": challenge2,
+        "code_challenge_method": "S256",
+    }
+)
+s, _, b = req("GET", f"{BASE}/authorize?{q_empty}")
+print(f"  T4 - empty scope HTTP {s} (expected 200 fallback 'read')")
+require(s == 200, f"T4 empty scope should default to read, got {s}: {b}")
+print("  T4 OK: empty scope defaults gracefully")
+
+print("\n=== ALL 12 STEPS OK - OAuth 2.1 flow + 18bis scope subset validated ===")
