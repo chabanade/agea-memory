@@ -94,6 +94,27 @@ def audit(event: str, **kw: Any) -> None:
     log.info(line)
 
 
+def _validate_scope_subset(requested: str, client_scopes: str) -> list[str]:
+    """Valide que le scope demande est un sous-ensemble du scope DCR du client.
+
+    Empeche l'escalade silencieuse: un client DCR=read qui demande read+admin
+    est rejete en 400 invalid_scope avant l'affichage du consent.
+    Retourne la liste des scope tokens valides (normalisee).
+    """
+    req = [s for s in requested.split() if s]
+    allowed = set(s for s in client_scopes.split() if s)
+    extra = [s for s in req if s not in allowed]
+    if extra:
+        raise HTTPException(
+            400,
+            {
+                "error": "invalid_scope",
+                "error_description": f"Requested scopes not registered for this client: {sorted(set(extra))}",
+            },
+        )
+    return req
+
+
 # -------------------------------------------------------------------
 # SQLite
 # -------------------------------------------------------------------
@@ -356,6 +377,7 @@ async def authorize_get(
     for s in scope_tokens:
         if s not in SUPPORTED_SCOPES:
             raise HTTPException(400, {"error": "invalid_scope", "scope": s})
+    _validate_scope_subset(scope, row["scopes"])
 
     return templates.TemplateResponse(
         "consent.html",
@@ -399,6 +421,7 @@ async def authorize_post(
         row = con.execute("SELECT * FROM clients WHERE client_id=?", (client_id,)).fetchone()
         if not row or redirect_uri not in json.loads(row["redirect_uris"]):
             raise HTTPException(400, {"error": "invalid_client_or_redirect"})
+        _validate_scope_subset(scope, row["scopes"])
         code = _rand(32)
         con.execute(
             "INSERT INTO auth_codes(code_hash, client_id, redirect_uri, scope, code_challenge, "
