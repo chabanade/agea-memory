@@ -17,9 +17,9 @@
 		reverse_proxy oauth-proxy:8081
 	}
 
-	# MCP Remote Server -> Streamable HTTP (Claude.ai connector)
+	# MCP legacy ferme le 26/04/2026 - migration alpha complete sur /mcp-oauth/mcp depuis 21/04/2026 (5j sans hit legitime)
 	handle /mcp* {
-		reverse_proxy mcp-remote:8888
+		respond "Endpoint /mcp deprecated. Use https://srv987452.hstgr.cloud/mcp-oauth/mcp (OAuth 2.1 DCR + PKCE)." 410
 	}
 
 	# Webhook n8n -> n8n (Phase 4 - workflows IA)
