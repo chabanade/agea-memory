@@ -46,6 +46,18 @@ RETURN a.uuid AS alias_uuid, a.name AS alias_name, count{(a)--()} AS alias_edges
        c.uuid AS canonical_uuid, c.name AS canonical_name, count{(c)--()} AS canonical_edges
 """
 
+CYPHER_BLACKLIST_DRYRUN = """
+MATCH (n:Entity {name: $name, group_id: $gid})
+RETURN n.uuid AS uuid, count{(n)--()} AS edges
+"""
+
+CYPHER_BLACKLIST_DELETE = """
+MATCH (n:Entity {name: $name, group_id: $gid})
+WITH n, n.uuid AS uuid, count{(n)--()} AS edges
+DETACH DELETE n
+RETURN uuid, edges
+"""
+
 
 def load_config(config_path: Path) -> dict:
     if not config_path.exists():
@@ -68,6 +80,7 @@ def main():
     cfg = load_config(args.config)
     gid = cfg["group_id"]
     aliases = cfg["aliases"]
+    blacklist = cfg.get("blacklist", [])
 
     uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
     user = os.environ.get("NEO4J_USER", "neo4j")
@@ -76,10 +89,14 @@ def main():
         log.error("NEO4J_PASSWORD non defini")
         sys.exit(3)
 
-    log.info(f"start mode={'DRY-RUN' if args.dry_run else 'APPLY'} aliases_count={len(aliases)} gid={gid}")
+    log.info(
+        f"start mode={'DRY-RUN' if args.dry_run else 'APPLY'} "
+        f"aliases_count={len(aliases)} blacklist_count={len(blacklist)} gid={gid}"
+    )
 
     driver = GraphDatabase.driver(uri, auth=(user, pwd))
     merged_total = 0
+    deleted_total = 0
     skipped = 0
     errors = 0
 
@@ -114,10 +131,44 @@ def main():
                 except Exception as e:
                     log.error(f"alias={alias} canonical={canonical} ERROR: {e}")
                     errors += 1
+
+            for name in blacklist:
+                try:
+                    if args.dry_run:
+                        result = session.run(CYPHER_BLACKLIST_DRYRUN, name=name, gid=gid)
+                        records = list(result)
+                        if not records:
+                            log.info(f"dry-run blacklist={name} action=NOOP (noeud inexistant)")
+                            skipped += 1
+                        else:
+                            for rec in records:
+                                log.info(
+                                    f"dry-run blacklist={name} action=WOULD_DELETE "
+                                    f"uuid={rec['uuid']} edges_to_delete={rec['edges']}"
+                                )
+                    else:
+                        result = session.run(CYPHER_BLACKLIST_DELETE, name=name, gid=gid)
+                        records = list(result)
+                        if not records:
+                            log.info(f"blacklist={name} action=NOOP (idempotent, deja supprime ou inexistant)")
+                            skipped += 1
+                        else:
+                            for rec in records:
+                                log.info(
+                                    f"blacklist={name} action=DELETED "
+                                    f"uuid={rec['uuid']} edges_deleted={rec['edges']} node_deleted=1"
+                                )
+                                deleted_total += 1
+                except Exception as e:
+                    log.error(f"blacklist={name} ERROR: {e}")
+                    errors += 1
     finally:
         driver.close()
 
-    log.info(f"done merged={merged_total} skipped={skipped} errors={errors}")
+    log.info(
+        f"done merged={merged_total} deleted={deleted_total} "
+        f"skipped={skipped} errors={errors}"
+    )
     sys.exit(0 if errors == 0 else 1)
 
 
